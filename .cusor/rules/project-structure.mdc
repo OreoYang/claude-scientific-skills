@@ -1,0 +1,36 @@
+---
+description: "XPON project directory structure, tech stack, and build system overview"
+alwaysApply: true
+---
+
+# XPON Project Structure Guide
+
+This is a Vecima Networks XPON (XGS-PON) project with the following main components:
+
+## Main Repos (multi-root workspace, each repo is a workspace root)
+- **xpon-apps/**: Core XPON applications including protocol handlers, managers, and utilities
+- **xpon-libs/**: Shared libraries used across XPON applications
+- **xpon-protos/**: Protocol buffer definitions for gRPC services
+- **netconf-polt/**: NETCONF server implementation for PON OLT (TR-383, TR-385, WT-451)
+
+## Key Components in xpon-apps/
+- **protocol-handler/**: DHCPv4/v6 relay, PPPoE, and other protocol handlers
+- **event-monitor/**: System event monitoring
+- **node-mgr/**: Node management functionality
+- **metrics-mgr/**: Metrics collection and management
+- **logsvr/**: Logging server
+- **swmgr/**: Software management
+- **callhome/**: Call home functionality
+- **notif-mgr/**: Notification management
+
+## Build System
+- Uses CMake build system with CMakeLists.txt in each repo
+- Supports both XPON and DPOE distributions via DISTRO variable
+- Uses vcm-cmake module for Vecima-specific build configurations
+
+## Key Technologies
+- C/C++ codebase for embedded systems
+- NETCONF/YANG for network configuration (TR-383, TR-385, WT-451 standards)
+- gRPC for vOMCI interfaces
+- Redis for session storage
+- Broadcom OLT API integration
