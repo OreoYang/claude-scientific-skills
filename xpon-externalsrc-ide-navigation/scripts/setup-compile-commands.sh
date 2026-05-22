@@ -1,12 +1,10 @@
 #!/bin/bash
-# Generate compile_commands.json for clangd and symlink at each externalsrc repo root.
+# Symlink build/compile_commands.json to each externalsrc repo root for clangd.
 #
 # Usage:
-#   ./setup-compile-commands.sh                 # export all repos + symlink
-#   ./setup-compile-commands.sh netconf-polt    # one repo
-#   ./setup-compile-commands.sh --link-only     # symlink only (DB already in build/)
-#
-# Prerequisite for export: bitbake <recipe> -c configure (creates <repo>/build/CMakeCache.txt)
+#   ./setup-compile-commands.sh              # symlink (default; bitbake already built)
+#   ./setup-compile-commands.sh netconf-polt # one repo
+#   ./setup-compile-commands.sh --export     # re-run cmake export, then symlink
 set -euo pipefail
 
 SRCROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -55,7 +53,7 @@ link_compile_commands() {
 			ln -sf build/compile_commands.json "${link}"
 			echo "OK ${repo}: compile_commands.json -> build/compile_commands.json"
 		else
-			echo "SKIP ${repo}: no ${build_db}"
+			echo "SKIP ${repo}: no ${build_db} (bitbake ${repo} first, or use --export)"
 		fi
 	done
 }
@@ -65,7 +63,6 @@ export_compile_commands() {
 
 	if ! CMAKE="$(find_yocto_cmake netconf-polt)"; then
 		echo "ERROR: cmake not found under ${BUILDDIR}/tmp/work and not in PATH" >&2
-		echo "Hint: source setup-env and run bitbake for at least one recipe first." >&2
 		exit 1
 	fi
 	echo "Using cmake: ${CMAKE}"
@@ -73,7 +70,7 @@ export_compile_commands() {
 	for repo in "${repos[@]}"; do
 		local build_dir="${SRCROOT}/${repo}/build"
 		if [[ ! -f "${build_dir}/CMakeCache.txt" ]]; then
-			echo "SKIP ${repo}: no ${build_dir}/CMakeCache.txt (bitbake ${repo} -c configure first)"
+			echo "SKIP ${repo}: no ${build_dir}/CMakeCache.txt"
 			continue
 		fi
 		echo "EXPORT ${repo}..."
@@ -81,12 +78,12 @@ export_compile_commands() {
 	done
 }
 
-link_only=0
+do_export=0
 repos=()
 
 for arg in "$@"; do
 	case "${arg}" in
-		--link-only) link_only=1 ;;
+		--export) do_export=1 ;;
 		*) repos+=("${arg}") ;;
 	esac
 done
@@ -95,7 +92,7 @@ if [[ ${#repos[@]} -eq 0 ]]; then
 	repos=("${REPOS[@]}")
 fi
 
-if [[ ${link_only} -eq 0 ]]; then
+if [[ ${do_export} -eq 1 ]]; then
 	export_compile_commands "${repos[@]}"
 fi
 
