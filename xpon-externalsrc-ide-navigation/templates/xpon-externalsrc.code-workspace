@@ -1,0 +1,20 @@
+{
+	"folders": [
+		{ "path": "netconf-polt", "name": "netconf-polt" },
+		{ "path": "xpon-apps", "name": "xpon-apps" },
+		{ "path": "xpon-libs", "name": "xpon-libs" },
+		{ "path": "xpon-protos", "name": "xpon-protos" },
+		{ "path": "xpon-yang", "name": "xpon-yang" }
+	],
+	"settings": {
+		"C_Cpp.intelliSenseEngine": "disabled",
+		"clangd.arguments": [
+			"--compile-commands-dir=${workspaceFolder}",
+			"--background-index",
+			"--clang-tidy=false"
+		]
+	},
+	"extensions": {
+		"recommendations": ["llvm-vs-code-extensions.vscode-clangd"]
+	}
+}
