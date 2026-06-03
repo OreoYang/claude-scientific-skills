@@ -1,0 +1,57 @@
+---
+description: Rebuild netconf-polt (BitBake externalsrc), deploy bcmolt_netconf_server on OLT, verify DbgCli; GDB sysroot recap
+alwaysApply: true
+---
+
+# netconf-polt：重编、替换设备、验证
+
+## 源码（externalsrc）
+
+- **树路径**：`/home/oreo/works/repo/build-xpon/workspace/sources/netconf-polt`
+- **bbappend**：`/home/oreo/works/repo/build-xpon/workspace/appends/netconf-polt.bbappend`（`EXTERNALSRC` 指向上面的树；改 C 代码后在此目录编即可）
+
+## BitBake 重编
+
+在 **`~/works/repo`**（即 **`/home/oreo/works/repo`**）下 **source** **`setup-env`**，会自动进入 **`build-xpon`** 并加载 BitBake 环境（`MACHINE` 一般为 **`exs1610`**）。注意用 **`.`** 点号执行，与脚本在同一 shell 里生效：
+
+```bash
+cd ~/works/repo
+. setup-env
+bitbake netconf-polt -c compile -f
+bitbake netconf-polt
+```
+
+执行完后当前目录应为 **`build-xpon`**（例如提示符形如 `…:~/works/repo/build-xpon$`）。
+
+- **`-c compile -f`**：强制重编，避免 externalsrc 下 sstate 误判未变更。
+
+## 本机产物路径
+
+中间镜像里可执行文件（`0.0+git` 段随 PV 可能变化）：
+
+`/home/oreo/works/repo/build-xpon/tmp/work/exs1610-vcm-linux/netconf-polt/0.0+git/image/usr/bin/bcmolt_netconf_server`
+
+不确定目录名时：
+
+```bash
+find /home/oreo/works/repo/build-xpon/tmp/work -path '*netconf-polt*' -name bcmolt_netconf_server
+```
+
+## 拷到 OLT 并重启服务
+
+```bash
+scp /home/oreo/works/repo/build-xpon/tmp/work/exs1610-vcm-linux/netconf-polt/0.0+git/image/usr/bin/bcmolt_netconf_server \
+    root@<OLT>:/usr/bin/bcmolt_netconf_server
+ssh root@<OLT> "chmod 755 /usr/bin/bcmolt_netconf_server && systemctl restart netconf-polt.service && systemctl status netconf-polt.service --no-pager"
+```
+
+（服务名以镜像为准；整包 **RAUC** 升级时改为打 bundle 再按发布流程刷机。）
+
+## 验证（DbgCli / `xpon` 无参崩溃）
+
+在 NETCONF 调试 CLI 中**只输入** `xpon` 后回车：**应打印 Usage，不应 SIGSEGV**。可配合 `journalctl -u netconf-polt.service -b --no-pager | tail`.
+
+## Coredump + 宿主 GDB（符号齐全时）
+
+1. 同一 **`DBGROOT`** 下解压 **`hank-olt-image-exs1610-<build>.dbg.tar.bz2`**，并从 **`hank-olt-bundle-exs1610-<build>.raucb`**（squashfs）里解出 **`xpon-olt-image-exs1610.rootfs.tar.bz2`** 展开到 **`DBGROOT`**，使存在 **`$DBGROOT/usr/bin/bcmolt_netconf_server`** 与各 **`usr/lib/*.so`**。
+2. **宿主** `gdb`：`set debuginfod off`，`set auto-load safe-path /`，`set sysroot <DBGROOT>`，`set solib-search-path <DBGROOT>/usr/lib:<DBGROOT>/usr/lib/.debug`，`file <DBGROOT>/usr/bin/bcmolt_netconf_server`，`core <core>`。

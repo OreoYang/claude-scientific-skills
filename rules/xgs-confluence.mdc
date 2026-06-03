@@ -1,0 +1,171 @@
+---
+description: "Confluence wiki pages for XGS/XPON: English-only, TOC macro, structure, MCP update format"
+alwaysApply: false
+---
+
+# XGS Confluence Documentation Standards
+
+**Scope:** Creating or updating Confluence pages under `vecima.atlassian.net` for XGS/XPON design notes, feasibility reports, and technical runbooks.
+
+**Site:** `https://vecima.atlassian.net/wiki`
+
+---
+
+## Language and tone
+
+- **English only** on published Confluence pages — even when the source discussion or draft is in Chinese.
+- Do **not** literal-translate section-by-section; **restructure** for an English technical audience (merge redundant clarifications, drop chat-only asides).
+- Use clear, complete sentences; avoid telegraphic shorthand.
+- No AI or tool attribution in page body or version message.
+
+---
+
+## Required page structure
+
+Every non-trivial page **must** include:
+
+1. **Title (H1)** — descriptive English title matching the page topic.
+2. **Scope panel** — one info panel summarizing context, JIRA key(s), and what the page covers.
+3. **Table of Contents macro** — immediately after the scope panel, **before** the first major section (`<hr>` or `## 1. …`).
+4. **Numbered main sections** — use `<h2>` with `1.`, `2.`, … so the TOC macro can index them.
+5. **Last updated footer** — date + brief version note at the bottom.
+
+---
+
+## Table of Contents — use the Confluence macro
+
+**Do not** hand-build a TOC as an HTML/Markdown table with section summaries. Confluence provides a native **Table of Contents** macro that auto-generates clickable links from page headings.
+
+### Placement
+
+```
+<h1>Page Title</h1>
+<div data-type="panel-info">…scope…</div>
+<div data-type="extension" … toc macro …></div>   ← here
+<hr />
+<h2>1. First Section</h2>
+…
+```
+
+### MCP HTML format (`updateConfluencePage`, `contentFormat: "html"`)
+
+```html
+<div data-type="extension"
+     data-extension-key="toc"
+     data-extension-type="com.atlassian.confluence.macro.core"
+     data-layout="default"
+     data-parameters="{&quot;macroParams&quot;:{&quot;style&quot;:{&quot;value&quot;:&quot;none&quot;}},&quot;macroMetadata&quot;:{&quot;macroId&quot;:{&quot;value&quot;:&quot;e5cf62ea-4fd1-444f-aa33-56c0417aae3f&quot;},&quot;schemaVersion&quot;:{&quot;value&quot;:&quot;1&quot;},&quot;title&quot;:&quot;Table of Contents&quot;}}">
+</div>
+```
+
+- **`style: none`** — plain list (matches current wiki pages).
+- The macro reads **`<h2>` / `<h3>` / `<h4>`** on the page; no manual TOC rows to maintain.
+
+### Confluence storage format (REST API direct update)
+
+```xml
+<ac:structured-macro ac:name="toc" ac:schema-version="1">
+  <ac:parameter ac:name="style">none</ac:parameter>
+</ac:structured-macro>
+```
+
+### Heading rules (for TOC to work)
+
+- Top-level sections: `<h2>1. Problem Statement</h2>`, `<h2>2. …</h2>`, etc.
+- Subsections: `<h3>11.1 …</h3>`, `<h4>…</h4>` — nested under parent in TOC.
+- Do **not** use bold paragraphs instead of headings for section titles.
+
+### When editing an existing page
+
+- If a hand-built TOC table is present, **remove it** and insert the TOC macro instead.
+- After adding or renaming sections, the macro updates automatically — no TOC table edits needed.
+
+**Reference page:** [Per-PON Indication Parallelization](https://vecima.atlassian.net/wiki/spaces/~Oreo.Yang/pages/210174587) (v11+).
+
+---
+
+## Architecture and flow diagrams (required for solution analysis)
+
+When a page compares **two or more candidate schemes** (e.g. Scheme A vs B), **each scheme must have its own architecture section** with diagrams — not prose-only summaries.
+
+### Required per scheme
+
+1. **System / architecture diagram** — ASCII or structured `<pre>` block showing components, queues, threads/modules, and data flow (entry → queue → handler → downstream).
+2. **Indication or process flow diagram** — step-by-step delivery path (e.g. BAL RX → transport → module queue → callback → side effects).
+3. **Symmetric layout** — use the same section template for every candidate so readers can compare side-by-side (see §4.1 / §4.2 on the reference page).
+
+### Section template (design / feasibility reports)
+
+```
+<h2>N. Target Architectures</h2>
+<h3>N.1 Scheme A — … Detailed</h3>
+  [system diagram]
+  [delivery flow diagram]
+  [subscription / routing rules]
+  [warnings: queue-full, pool, etc.]
+<h3>N.2 Scheme B — … Detailed</h3>
+  [same structure as N.1]
+```
+
+- Mark the **recommended** scheme with a status label (e.g. `<span data-type="status" data-color="green">Recommended</span>`).
+- A comparison **table alone is not sufficient** — diagrams are mandatory for each scheme being evaluated.
+- When presenting solution analysis in chat before publishing, include equivalent ASCII diagrams or Mermaid flowcharts so the user can review structure before Confluence upload.
+
+---
+
+## Content patterns by document type
+
+### Design / feasibility reports
+
+Include, when applicable:
+
+- Problem statement table (dimension vs current state)
+- Ordering or causal-chain requirements (diagram or preformatted block)
+- **Target architectures** — per-scheme system diagram + delivery/process flow (see **Architecture and flow diagrams** above); symmetric §N.1 / §N.2 layout
+- **Candidate comparison** — side-by-side table for alternatives (e.g. Scheme A / B), not prose-only
+- Shared-state / constraint table
+- Phased roadmap (Phase 0, 1, 2…)
+- Feasibility verdict table with status labels (Feasible / Partial / Not viable)
+- Design checklist before implementation
+- Key code locations table (file, line range, relevance)
+
+### Flow / runbook pages (e.g. RSSI paths)
+
+- Dual-path or multi-path comparison table
+- Sequence from trigger → handler → side effect
+- Code references with `file` and approximate line numbers
+
+---
+
+## Formatting (MCP `updateConfluencePage`)
+
+- Use **`contentFormat: "html"`** for structured content (headings, tables, panels, code blocks, TOC macro).
+- **Panels:** `<div data-type="panel-info|note|warning|success|error"><p>…</p></div>`
+- **TOC macro:** `<div data-type="extension" data-extension-key="toc" …>` (see above)
+- **Status:** `<span data-type="status" data-color="green|yellow|red|blue|neutral|purple">Label</span>`
+- **Code:** `<pre><code class="language-c">…</code></pre>` (set language: `c`, `plaintext`, etc.)
+- **Tables:** standard `<table><thead>…</thead><tbody>…</tbody></table>` — for **content**, not for TOC
+- Do not wrap body in `<html>`, `<head>`, or `<body>` tags.
+
+### Version message
+
+Always set a short **`versionMessage`** on update (e.g. `Add TOC macro; expand Scheme A/B/C comparison`).
+
+---
+
+## Update workflow
+
+1. **Read** current page: `getConfluencePage(cloudId, pageId, contentFormat: "html")`.
+2. **Preserve** existing content when extending; keep the TOC macro after the scope panel.
+3. **Update:** `updateConfluencePage` with full body, title, `versionMessage`.
+4. Confirm version number incremented in the response.
+
+**cloudId:** `vecima.atlassian.net`
+
+---
+
+## What to omit or fold in
+
+- Standalone “FAQ / misconception” sections that only clarify one API detail — fold into the section where the reader needs it (e.g. `pon_ni_mask` note inside Candidate Architectures, not a separate §2).
+- Duplicate Scheme B overview if a detailed deep-dive section exists — cross-reference by section number instead.
+- **Manual TOC tables** — always use the TOC macro instead.

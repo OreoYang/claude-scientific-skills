@@ -1,0 +1,305 @@
+---
+description: "XGSPON feature development workflow: task breakdown, design, coding, review, BitBake compile; repo map and branch policy"
+alwaysApply: true
+---
+
+# XGSPON Feature Development Workflow
+
+When the user provides a **feature description** (JIRA ticket, spec, or verbal requirement), follow this end-to-end workflow. Do not skip phases; output a structured task breakdown before coding.
+
+---
+
+## 1. Task Breakdown (from feature description)
+
+Parse the feature and produce a checklist covering four phases:
+
+| Phase | Deliverable |
+|-------|-------------|
+| **Framework design** | Affected repos/modules, data model (YANG/proto), API boundaries, call flow, dependencies, risk |
+| **Coding** | Concrete file/function changes per repo, branch name, **DbgCli commands** (if applicable), commit plan |
+| **Review** | Self-review checklist, CR text draft (see `xgs-cr-review.mdc`), commit message draft (see `xgs-git-commit.mdc`) |
+| **Compile & verify** | Recipe(s) to rebuild, bitbake commands, on-device or unit verification steps |
+
+Identify which repos are touched before writing code. A single feature often spans multiple trees (e.g. YANG change → netconf-polt handler → xpon-apps daemon).
+
+---
+
+## 2. Framework Design
+
+Before implementation, document:
+
+1. **Scope** — operator-visible behavior, TR-383/TR-385/WT-451 touch points if NETCONF-related
+2. **Data model** — new/changed YANG nodes (`xpon-yang`), protobuf messages (`xpon-protos`), sysrepo datastore paths
+3. **Layer map** — which layer owns the logic:
+   - YANG/sysrepo config → `netconf-polt` NETCONF modules
+   - OLT hardware/BAL → read `sw-bcm686olt` (read-only); implement in `netconf-polt/balapi`
+   - Background daemons → `xpon-apps`
+   - Shared utilities → `xpon-libs`
+4. **Interface contracts** — gRPC (vOMCI), IPC, Redis, BAL API calls between components
+5. **Debug surface** — plan DbgCli commands (`dump`/`get`/`enable`/`status`) if feature adds runtime state worth field inspection
+6. **Build order** — e.g. `xpon-yang` → `xpon-protos` → `xpon-libs` → `netconf-polt` → `xpon-apps`
+
+Keep design proportional to feature size; skip heavy design docs for trivial one-file fixes.
+
+---
+
+## 3. Coding
+
+### Paths
+
+| Item | Path |
+|------|------|
+| Project root (Yocto) | `~/works/repo` (`/home/oreo/works/repo`) |
+| Application source (externalsrc) | `~/works/repo/build-xpon/workspace/sources/` |
+| bbappend (devtool overrides) | `~/works/repo/build-xpon/workspace/appends/` |
+| Build dir (after setup-env) | `~/works/repo/build-xpon/` |
+
+### Git branch policy (mandatory)
+
+- **Forbidden**: develop or `git push` directly on **`hank-dev`** in any source repo.
+- **Required**: work on a personal branch whose name **starts with `Oreo/`** (e.g. `Oreo/XGS-9899-PerPon-Indication`).
+- Before editing, run `git branch --show-current` in each affected repo; create/checkout `Oreo/<JIRA>-<short-desc>` from updated `hank-dev` if needed.
+- Push only to `origin Oreo/...`; merge to `hank-dev` via PR/MR per team process.
+
+Each source tree under `workspace/sources/` is an **independent git repo** — check branch status per repo.
+
+### Read-only repos (mandatory — no edits)
+
+The following trees under `~/works/repo/build-xpon/workspace/sources/` are **read-only**:
+
+| Directory | Path | Allowed | Forbidden |
+|-----------|------|---------|-----------|
+| `sw-bcm686olt` | `sources/sw-bcm686olt/` | Read, search, trace APIs, learn BAL/host_driver behavior | Any file edit, patch, commit, or push |
+| `libyang` | `sources/libyang/` | Read upstream YANG parser/validator implementation | Any file edit, patch, commit, or push |
+| `sysrepo` | `sources/sysrepo/` | Read datastore/plugin implementation for understanding | Any file edit, patch, commit, or push |
+
+- Use these repos **only for code learning and understanding** how lower layers work.
+- If a feature appears to require changes in these trees, **stop and propose alternatives** in editable repos (e.g. `netconf-polt/balapi` for BAL integration, `netconf-polt` for sysrepo usage, `xpon-yang` for model changes).
+- Do **not** include these repos in coding plans, bitbake `-c compile -f` iteration, or CR diffs unless the user explicitly overrides this rule.
+
+### Code style — learn before edit (mandatory)
+
+Before writing or modifying any file:
+
+1. **Read surrounding code** in the same file and sibling files in that module — match indentation, brace style, naming, and comment style exactly.
+2. **Follow project standards**: RnD0045 (`xgs-coding.mdc`), logging (`xgs-logging.mdc`).
+3. **Match module conventions** — observe per-repo patterns:
+   - `netconf-polt`: Vecima copyright header, `bcmos_*` / `BCM_*` types, `BCM_LOG()` / module log IDs, static helpers in module `.c` files
+   - `xpon-apps` / `xpon-libs`: `LOG()` macro via `xponutils/logger.h`, `RET_OK` / `RET_ERROR`, snake_case handlers
+4. **Minimal diff** — no drive-by formatting, rename, or refactor outside the feature scope.
+5. **Whitespace** — truly empty blank lines; no trailing spaces; one newline at EOF.
+
+Use read-only repos (`sw-bcm686olt`, `libyang`, `sysrepo`) as **style/API reference** when tracing calls into lower layers.
+
+### DbgCli / DBC debug interfaces (add when appropriate)
+
+Runtime debug is exposed via **DbgCli** (DBC) — the remote/local debug console attached to each daemon. API: `xpon-libs/debug/include/dbg.h`.
+
+**When to add DBC commands** for a new feature:
+
+- New runtime state, counters, caches, or flags worth inspecting on a live OLT
+- `dump` / `get` of internal structures (complement to NETCONF `xpon get …`)
+- `enable` / `disable` / `status` toggles for debug logging or simulation paths
+- Test hooks (alarm simulation, forced state transitions) used in field debug
+
+Skip DBC for pure config/YANG-only changes with no new runtime state.
+
+**Where to implement**:
+
+| Component | DbgCli file | Command table |
+|-----------|-------------|---------------|
+| NETCONF / bbf-xpon | `netconf-polt/netconf_server/modules/bbf-xpon/bbf-debug.c` | `gCmsDbgCliCommands[]`, `gCmsDbgCliHelpText` |
+| protocol-handler | `xpon-apps/protocol-handler/common/src/ph_dbg.c` | same pattern |
+| metrics-mgr, node-mgr, … | `<app>/src/*_dbg.c` or `main.c` | per-app `*DbgCliCmds[]` |
+
+**Handler pattern** (follow existing handlers in `bbf-debug.c` / `ph_dbg.c`):
+
+```c
+static int dbg_my_feature_handler(int argc, char *argv[])
+{
+    if (argc < 1 || argv == NULL || argv[0] == NULL)
+    {
+        PRINT_USAGE_EXIT("Usage: my_feature <get|dump|enable|disable|status> ...\n");
+    }
+    /* parse argv[0] action; validate argc for each branch */
+    return RET_OK;   /* or RET_ERROR */
+}
+```
+
+**Registration checklist**:
+
+1. Add `{"my_feature", dbg_my_feature_handler}` to the app's `DbgCliCmdListEntryT` array (before `{NULL, NULL}`).
+2. Append usage line(s) to the matching `*HelpText` string.
+3. Keep `DBG_CLI_CMD_LIST_BASIC_ENTRIES` and `DBG_CLI_CMD_LIST_LOG_ENTRIES` in the table.
+4. Prefer extending existing commands (e.g. new `xpon get <type>`) when the feature fits an existing namespace.
+5. **Never SIGSEGV on empty/partial input** — always validate `argc` / `argv` and print Usage (see `xpon` no-arg crash fix).
+
+**Verify**: connect DbgCli to the daemon (`DBG_CLI_APP_NETCONF` for netconf-polt), run new command with no args → Usage printed, process stays alive.
+
+### Coding standards (summary)
+
+- Match existing style (see above); minimal, task-scoped diffs.
+- Logging per `xgs-logging.mdc`.
+- Include DBC commands in CR test plan when added.
+
+---
+
+## 4. Review
+
+Before declaring done:
+
+1. **Self-review** — logic, edge cases, memory/lock safety (C/C++), YANG constraint alignment
+2. **Code style** — diff matches surrounding module conventions; no unrelated formatting
+3. **DbgCli** — new commands registered, help text updated, empty-input returns Usage (no crash)
+4. **CR text** — draft using `xgs-cr-review.mdc` template (JIRA link, summary, changes, test plan incl. DBC steps)
+5. **Commit message** — `XGS-##### <imperative subject>` + bullet body per `xgs-git-commit.mdc`
+6. **Cross-repo consistency** — YANG ↔ handler ↔ proto ↔ app agree on field names and semantics
+
+Do not commit unless the user explicitly asks.
+
+---
+
+## 5. Compile & Verify
+
+### Environment setup (every new shell)
+
+```bash
+cd ~/works/repo
+. setup-env          # note: leading dot; lands in build-xpon/
+```
+
+`MACHINE` is typically `exs1610`, `DISTRO` is `xpon` (see `build-xpon/conf/local.conf`).
+
+### Module compile (iterative development)
+
+After editing externalsrc, force recompile to avoid stale sstate:
+
+```bash
+bitbake <recipe> -c compile -f
+bitbake <recipe>
+```
+
+| Recipe | Source tree | Role / key output |
+|--------|-------------|---------------------|
+| `netconf-polt` | `sources/netconf-polt` | NETCONF server `bcmolt_netconf_server`; TR-383/385/451 YANG handlers; ONU mgmt; vOMCI gRPC |
+| `xpon-apps` | `sources/xpon-apps` | OLT daemons: protocol-handler, node-mgr, event-monitor, metrics-mgr, logsvr, swmgr, callhome, notif-mgr, … |
+| `xpon-libs` | `sources/xpon-libs` | Shared libs: ipc, redis, log, timer, taskman, utils, dpl, leds |
+| `xpon-protos` | `sources/xpon-protos` | gRPC/protobuf definitions and generated C/C++ stubs (`proto/`) |
+| `xpon-yang` | `sources/xpon-yang` | YANG models (bbf TR-383/385, ietf, exs1610); consumed by NETCONF/sysrepo |
+| `sw-bcm686olt` | `sources/sw-bcm686olt/release` | **Read-only.** Broadcom BAL SDK / host_driver reference (IDE root: `release/`) |
+| `libyang` | `sources/libyang` | **Read-only.** Upstream YANG parser/validator (CESNET) |
+| `sysrepo` | `sources/sysrepo` | **Read-only.** Upstream YANG configuration datastore |
+
+bbappend files in `workspace/appends/` map each recipe to its externalsrc path via `EXTERNALSRC:pn-<recipe>`.
+
+### Full image / release bundle
+
+```bash
+bitbake xpon-olt-bundle
+```
+
+Use for release validation or RAUC bundle; prefer module compile during feature iteration.
+
+### netconf-polt quick verify
+
+See `netconf-polt-rebuild-verify.mdc`: deploy `bcmolt_netconf_server` to OLT, restart `netconf-polt.service`, smoke-test DbgCli.
+
+### IDE navigation (optional)
+
+From `workspace/sources/`: `./setup-compile-commands.sh` after bitbake builds; open `xpon-externalsrc.code-workspace` for clangd.
+
+---
+
+## Source Repository Reference
+
+### netconf-polt
+
+NETCONF/YANG server for BCM6862x/6865x PON OLT.
+
+| Subdir | Purpose |
+|--------|---------|
+| `netconf_server/` | NETCONF modules, YANG callbacks, DbgCli, sysrepo integration |
+| `netconf_server/modules/bbf-xpon/` | BBF XPON YANG module implementations |
+| `onu_mgmt/` | ONU management (embedded OMCI, vOMCI/TR-451) |
+| `balapi/` | Broadcom OLT API wrappers |
+| `daemon/` | Supporting daemons |
+| `third_party/yang-models/` | Bundled TR-383/385/451 YANG |
+
+Key binary: `bcmolt_netconf_server`.
+
+### xpon-apps
+
+Core XPON user-space applications (CMake).
+
+| Subdir | Purpose |
+|--------|---------|
+| `protocol-handler/` | DHCPv4/v6 relay, PPPoE, protocol handling |
+| `node-mgr/` | Node management |
+| `event-monitor/` | System event monitoring |
+| `metrics-mgr/` | Metrics collection |
+| `logsvr/` | Logging server |
+| `swmgr/` | Software management |
+| `callhome/` | Call-home functionality |
+| `notif-mgr/` | Notification management |
+| `lldp-ctlr/`, `led-mgr/`, `lag/`, `hwmon/` | Platform/network utilities |
+
+### xpon-libs
+
+Shared libraries used by xpon-apps and netconf-polt.
+
+| Subdir | Purpose |
+|--------|---------|
+| `ipc/` | Inter-process communication |
+| `redis/` | Redis session/storage helpers |
+| `log/` | Logging utilities |
+| `timer/`, `taskman/` | Scheduling and task management |
+| `utils/` | Common helpers |
+| `dpl/` | Data plane library abstractions |
+
+### xpon-protos
+
+Protocol buffer and gRPC service definitions; generates C/C++ stubs under `proto/`. Changes here require rebuilding dependents (`xpon-apps`, `netconf-polt`).
+
+### xpon-yang
+
+Authoritative YANG models for XPON (`yang/bbf/`, `yang/ietf/`, `yang/exs1610/`). YANG changes flow: edit here → rebuild `xpon-yang` → reinstall modules → update netconf-polt handlers.
+
+### sw-bcm686olt (read-only)
+
+Broadcom BAL SDK and host driver. **IDE/clangd root**: `release/`. Contains `host_driver/`, `switch_sdk/`, BAL API. **Do not modify** — read only to understand chip/driver behavior; implement OLT/PON logic in `netconf-polt/balapi`.
+
+### libyang (read-only)
+
+Upstream YANG parser/validator (CESNET). **Do not modify** — read only to understand parsing/validation; model changes go in `xpon-yang`, integration in `netconf-polt`.
+
+### sysrepo (read-only)
+
+Upstream YANG configuration datastore. **Do not modify** — read only to understand datastore/plugin behavior; usage and callbacks live in `netconf-polt`.
+
+---
+
+## Feature → Repo Quick Map
+
+| Feature area | Primary repo(s) |
+|--------------|-----------------|
+| NETCONF config / YANG RPC | `netconf-polt`, `xpon-yang` |
+| ONU / OMCI / vOMCI | `netconf-polt/onu_mgmt`, `xpon-protos` |
+| OLT chip / PON port / BAL | read `sw-bcm686olt`; code in `netconf-polt/balapi` |
+| DHCP/PPPoE/protocol | `xpon-apps/protocol-handler` |
+| System mgmt / events / metrics | `xpon-apps` |
+| Shared infra (log, ipc, redis) | `xpon-libs` |
+| gRPC / protobuf API | `xpon-protos` |
+| YANG model only | `xpon-yang` |
+| sysrepo/libyang behavior | read `sysrepo`, `libyang`; fix/integration in `netconf-polt` |
+
+---
+
+## Agent Behavior Summary
+
+1. Receive feature → output **task breakdown** (design / code / review / compile).
+2. Confirm **Oreo/** branch in each affected repo before editing.
+3. **Never edit** `sw-bcm686olt`, `libyang`, or `sysrepo` — read-only for learning.
+4. **Learn code style** from target module before editing; never edit read-only repos.
+5. Implement minimal changes; add **DbgCli/DBC** commands when feature introduces inspectable runtime state.
+6. Draft CR + commit message; run **module bitbake** for affected editable recipes only.
+7. Report build result and verification steps (incl. DbgCli smoke test); escalate to `xpon-olt-bundle` only when integration testing requires full image.
