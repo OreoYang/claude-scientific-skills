@@ -1,36 +1,71 @@
 ---
-description: "XPON project directory structure, tech stack, and build system overview"
+description: "XPON externalsrc layout, recipe map, build commands, feature→repo guide"
 alwaysApply: true
 ---
 
-# XPON Project Structure Guide
+# XPON Project Structure & Build Guide
 
-This is a Vecima Networks XPON (XGS-PON) project with the following main components:
+Vecima XGS-PON Yocto workspace. Application C/C++ work lives in **externalsrc** under `build-xpon/workspace/sources/`.
 
-## Main Repos (multi-root workspace, each repo is a workspace root)
-- **xpon-apps/**: Core XPON applications including protocol handlers, managers, and utilities
-- **xpon-libs/**: Shared libraries used across XPON applications
-- **xpon-protos/**: Protocol buffer definitions for gRPC services
-- **netconf-polt/**: NETCONF server implementation for PON OLT (TR-383, TR-385, WT-451)
+## Paths
 
-## Key Components in xpon-apps/
-- **protocol-handler/**: DHCPv4/v6 relay, PPPoE, and other protocol handlers
-- **event-monitor/**: System event monitoring
-- **node-mgr/**: Node management functionality
-- **metrics-mgr/**: Metrics collection and management
-- **logsvr/**: Logging server
-- **swmgr/**: Software management
-- **callhome/**: Call home functionality
-- **notif-mgr/**: Notification management
+| Item | Path |
+|------|------|
+| Project root | `~/works/repo` |
+| Externalsrc | `~/works/repo/build-xpon/workspace/sources/` |
+| bbappend overrides | `~/works/repo/build-xpon/workspace/appends/` |
+| Build dir (after `. setup-env`) | `~/works/repo/build-xpon/` |
 
-## Build System
-- Uses CMake build system with CMakeLists.txt in each repo
-- Supports both XPON and DPOE distributions via DISTRO variable
-- Uses vcm-cmake module for Vecima-specific build configurations
+## Recipe ↔ source map
 
-## Key Technologies
-- C/C++ codebase for embedded systems
-- NETCONF/YANG for network configuration (TR-383, TR-385, WT-451 standards)
-- gRPC for vOMCI interfaces
-- Redis for session storage
-- Broadcom OLT API integration
+| Recipe | Source tree | Key output / role |
+|--------|-------------|-------------------|
+| `netconf-polt` | `sources/netconf-polt` | `bcmolt_netconf_server`; TR-383/385/451 NETCONF; ONU mgmt; vOMCI |
+| `xpon-apps` | `sources/xpon-apps` | protocol-handler, node-mgr, event-monitor, metrics-mgr, logsvr, swmgr, … |
+| `xpon-libs` | `sources/xpon-libs` | ipc, redis, log, timer, taskman, utils, dpl |
+| `xpon-protos` | `sources/xpon-protos` | gRPC/protobuf stubs (`proto/`) |
+| `xpon-yang` | `sources/xpon-yang` | YANG models (bbf, ietf, exs1610) |
+| `sw-bcm686olt` | `sources/sw-bcm686olt/release` | Broadcom BAL SDK（只读） |
+| `libyang` | `sources/libyang` | YANG parser（只读） |
+| `sysrepo` | `sources/sysrepo` | YANG datastore（只读） |
+
+bbappend files in `workspace/appends/` set `EXTERNALSRC:pn-<recipe>`.
+
+## Build commands
+
+```bash
+cd ~/works/repo && . setup-env    # lands in build-xpon/
+bitbake <recipe> -c compile -f    # force recompile after externalsrc edits
+bitbake <recipe>
+bitbake xpon-olt-bundle           # full RAUC release bundle
+```
+
+`MACHINE` typically `exs1610`, `DISTRO` `xpon` (`build-xpon/conf/local.conf`).
+
+**IDE:** after bitbake, from `workspace/sources/`: `./setup-compile-commands.sh`; open `xpon-externalsrc.code-workspace`.
+
+## Feature → repo quick map
+
+| Feature area | Primary repo(s) |
+|--------------|-----------------|
+| NETCONF / YANG RPC | `netconf-polt`, `xpon-yang` |
+| ONU / OMCI / vOMCI | `netconf-polt/onu_mgmt`, `xpon-protos` |
+| OLT chip / BAL | read `sw-bcm686olt`; implement in `netconf-polt/balapi` |
+| DHCP/PPPoE/protocol | `xpon-apps/protocol-handler` |
+| System mgmt / events / metrics | `xpon-apps` |
+| Shared infra | `xpon-libs` |
+| gRPC / protobuf | `xpon-protos` |
+| YANG model only | `xpon-yang` |
+| sysrepo/libyang usage | `netconf-polt` (integration) |
+
+## Repo subdirs (key areas)
+
+**netconf-polt:** `netconf_server/modules/bbf-xpon/` (YANG handlers), `onu_mgmt/`, `balapi/`, `daemon/`
+
+**xpon-apps:** `protocol-handler/`, `node-mgr/`, `event-monitor/`, `metrics-mgr/`, `logsvr/`, `swmgr/`, `callhome/`, `notif-mgr/`
+
+**xpon-libs:** `ipc/`, `redis/`, `log/`, `timer/`, `taskman/`, `utils/`, `dpl/`, `debug/` (DbgCli API: `debug/include/dbg.h`)
+
+## Tech stack
+
+C/C++ (CMake), NETCONF/YANG (TR-383/385/WT-451), gRPC (vOMCI), Redis, Broadcom OLT/BAL API.
