@@ -1,0 +1,68 @@
+---
+description: Confluence wiki update workflow — concise technical docs, ASCII diagrams, preserve TOC; use when editing Atlassian/Confluence pages.
+alwaysApply: false
+---
+
+# Confluence Update (Vecima Atlassian)
+
+**Wiki:** `https://vecima.atlassian.net/wiki` · **MCP:** `user-atlassian` (`confluence_get_page`, `confluence_update_page`)
+
+## Workflow (mandatory)
+
+1. **`confluence_get_page`** — record `version`, check for `{toc}` / `macro-diagram` / existing `code` macros.
+2. **Draft in chat** — section title, bullet summary of changes (not full page dump). **Wait for user confirmation** unless they explicitly said “更新到 Confluence” / “publish now”.
+3. **Update** — prefer **partial `body.storage` insert/replace** at a section anchor; bump `version` + `version_comment`.
+4. **Report** — page URL, new version number, what changed.
+
+**Never** full-page markdown replace via MCP if the page has `{toc}` or other Confluence-native macros — it strips them.
+
+## Content style
+
+- **Technical & concise** — logic and call flow over prose; tables for comparisons/counters.
+- **No line-level code dumps** unless user asks — file/function names OK, skip `file.c:862-874` unless debugging.
+- **English or 中文** — match the page’s existing language.
+- One **Conclusion** line per major section, then diagrams/flows, then short Verify/Mitigation if relevant.
+
+## Diagrams (required when explaining architecture or RX/TX paths)
+
+Include **both** where applicable:
+
+| Type | Use for |
+|------|---------|
+| **System block** | Components, pools, cross-process fan-out |
+| **Flow / decision** | Branches, drop points, counters (`msg_too_many_auto`, etc.) |
+
+### Preferred: ASCII in `{code}` macro (reliable on Vecima)
+
+Match existing pages on `~Oreo.Yang` space:
+
+- `ac:name="code"`, `language=none`, `breakoutMode=wide`, `breakoutWidth=760`
+- Monospace box-drawing (`│`, `├─`, `└─`, `+---+`) or simple arrows
+- Label: `h4` above each block (e.g. “System view”, “RX allocation flow”)
+
+### Avoid: `macro-diagram` (Mermaid)
+
+Shows **“Error loading the extension!”** on this instance (pre-existing). Do not add new `macro-diagram` unless user confirms the app is fixed.
+
+### Fallback
+
+- Confluence **table** for simple pipelines
+- PNG/SVG from [mermaid.live](https://mermaid.live) only if user wants pretty figures and accepts manual upkeep
+
+## Preserve on edit
+
+- `{toc}` macro at page top
+- Existing `code` / diagram style consistency
+- Section numbering (`§4.6`, `5) …`) unless restructuring is requested
+
+## Vecima XPON doc patterns (reference)
+
+- Per-process isolation: netconf vs `example_user_appl` — separate `transport stat` / CLD
+- Transport pools: `free_auto_list` (AUTO/indications) vs `free_req_list` (sync API)
+- Drop before unpack → no CLD, no journal (`msg_too_many_auto`)
+
+## Do not
+
+- Publish without confirmation on exploratory drafts
+- Use one-off Python/REST scripts when MCP partial update suffices
+- Commit Confluence content to git unless user asks

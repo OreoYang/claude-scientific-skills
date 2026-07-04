@@ -1,0 +1,130 @@
+---
+description: "Oreo XGSPON dev workflow: feature task breakdown, branch policy, read-only repos, DbgCli"
+alwaysApply: true
+---
+
+# XGSPON Feature Development (Oreo)
+
+When given a **feature description**, follow this workflow.
+
+---
+
+## 1. Task breakdown
+
+| Phase | Deliverable |
+|-------|-------------|
+| **Framework design** | Affected repos, YANG/proto changes, API boundaries, call flow, DbgCli plan |
+| **Coding** | Files/functions, `Oreo/` branch, DbgCli commands if needed |
+| **Review** | Self-review; CR; commit message format |
+| **Compile & verify** | `bitbake <recipe> -c compile -f`; OLT/DbgCli verify when applicable |
+
+---
+
+## 2. Framework design (brief)
+
+Document scope, data model (`xpon-yang` / `xpon-protos`), layer ownership, build order (`xpon-yang` → `xpon-protos` → `xpon-libs` → `netconf-polt` → `xpon-apps`), and planned DbgCli commands for new runtime state.
+
+---
+
+## 3. Git branch policy (mandatory)
+
+- **Forbidden**: develop or `git push` on **`hank-dev`**.
+- **Required**: branch name starts with **`Oreo/`** (e.g. `Oreo/XGS-9899-feature`).
+- Check `git branch --show-current` in **each** affected repo under `workspace/sources/`.
+
+---
+
+## 4. Read-only repos (mandatory — no edits)
+
+| Directory | Use | Forbidden |
+|-----------|-----|-----------|
+| `sw-bcm686olt` | Learn BAL/host_driver API | Edit / commit / push |
+| `libyang` | Learn YANG parser | Edit / commit / push |
+| `sysrepo` | Learn datastore behavior | Edit / commit / push |
+
+Implement in editable repos: `netconf-polt/balapi`, `netconf-polt`, `xpon-yang`.
+
+---
+
+## 5. Code style & DbgCli
+
+**Style:** read surrounding code before edit; minimal diff.
+
+**DbgCli (DBC)** — add when feature has inspectable runtime state:
+
+| Component | File |
+|-----------|------|
+| NETCONF/bbf-xpon | `netconf-polt/.../bbf-debug.c` |
+| protocol-handler | `xpon-apps/protocol-handler/common/src/ph_dbg.c` |
+
+Handler: validate `argc`/`argv`; empty input → print Usage, return `RET_OK` (**no SIGSEGV**). Register in `gCmsDbgCliCommands[]` + update help text. API: `xpon-libs/debug/include/dbg.h`.
+
+---
+
+## 6. Review checklist
+
+Logic / memory safety / YANG alignment → code style → DbgCli → CR text → commit message → cross-repo consistency. Do not commit unless user asks.
+
+**netconf-polt concurrency:** identify execution plane (config change / oper-get pull / oper-push / indication / metrics). Operational `sr_set_item*` / `sr_apply_changes` must run **outside** all L1–L7 locks (OPR-1). See `netconf-polt-mutex-rule.mdc` (auto-applied on `netconf-polt/**`).
+
+---
+
+## 7. Minimal diff for review (mandatory on refactors)
+
+Goal: reviewer sees **only the intentional logic change** (lock, data structure, API), not a reformatting avalanche.
+
+### 7.1 Preserve control-flow shape
+
+- Keep existing patterns: `do { ... } while (0)`, early `break`/`return`, brace placement.
+- Do **not** flatten `do-while` into straight-line `if/return` unless the logic truly changes.
+
+### 7.2 Do not re-indent unchanged bodies
+
+When wrapping code (new lock, outer `for`, guard macro):
+
+- **Only add/remove/replace the wrapper lines** (lock, loop header, list index).
+- Leave the **inner block at its original column** — even if outer braces look misaligned.
+- Indentation at the wrapper may violate local style; **review-friendly diff beats brace aesthetics**.
+- Prefer **`XPON_VANI_RUNTIME_GUARD(pon_ni)`** over explicit `bcmos_mutex_lock`/`unlock` pairs for short critical sections — avoids extra ±2 lines and keeps intent clear. Minimal-diff targets **body re-indent**, not avoiding the guard macro.
+
+Example — per-PON lock on an existing `STAILQ_FOREACH`:
+
+```c
+    unsigned int local_skip_count = metrics_cache_bal_onu_poll_skip;
+    int _pon;
+    for (_pon = 0; _pon < XPON_VANI_NUM_PON_BUCKETS && n < snap_cap; _pon++)
+    {
+        XPON_VANI_CONFIG_GUARD(_pon);
+        STAILQ_FOREACH_SAFE(hdr, &v_ani_list[_pon], next, hdr_tmp)
+    {   /* ← opening brace stays at original column; body lines unchanged */
+        va = (xpon_v_ani *)hdr;
+        ...
+    }
+    }
+```
+
+Diff should show ~5 changed lines; the foreach **body must not appear** in the diff.
+
+### 7.3 Prefer inline wrapper over helper extraction
+
+- Do **not** move an unchanged loop into a new static helper just to shrink the parent function — that hides the real change across two hunks.
+- Extract a helper only when it **reduces duplication** or **shortens a critical section** (e.g. snapshot-then-unlock before slow I/O), not for cosmetic diff layout.
+
+### 7.4 Verify before hand-off
+
+```bash
+git diff <base> -- <file>   # body of refactored loop should be absent from diff
+```
+
+If many unchanged lines show as modified, fix indentation/wrapping before requesting review.
+
+---
+
+## Agent summary
+
+1. Task breakdown → confirm `Oreo/` branches → never edit read-only repos.
+2. Code with module-matched style; add DbgCli when appropriate.
+3. Refactors: minimal diff — preserve `do-while`/brace shape; wrap locks without re-indenting bodies.
+4. netconf-polt locks/sysrepo: check execution plane (OPR-1 oper-push unlock-first; OPR-2 oper-get snapshot-only).
+5. `bitbake` affected recipes; verify on OLT if needed.
+6. Draft CR + commit message.

@@ -1,0 +1,52 @@
+---
+description: "Rebuild netconf-polt, deploy to OLT, DbgCli verify, GDB sysroot"
+globs: "**/netconf-polt/**"
+alwaysApply: false
+---
+
+# netconf-polt：重编、替换设备、验证
+
+## 源码（externalsrc）
+
+- **树路径**：`~/works/repo/build-xpon/workspace/sources/netconf-polt`
+- **bbappend**：`~/works/repo/build-xpon/workspace/appends/netconf-polt.bbappend`
+
+## BitBake 重编
+
+```bash
+cd ~/works/repo && . setup-env
+bitbake netconf-polt -c compile -f
+bitbake netconf-polt
+```
+
+`-c compile -f` 强制重编，避免 externalsrc sstate 误判未变更。
+
+## 本机产物路径
+
+```bash
+find ~/works/repo/build-xpon/tmp/work -path '*netconf-polt*' -name bcmolt_netconf_server
+```
+
+典型路径：`…/netconf-polt/0.0+git/image/usr/bin/bcmolt_netconf_server`
+
+## 拷到 OLT 并重启服务
+
+```bash
+scp <path>/bcmolt_netconf_server root@<OLT>:/usr/bin/bcmolt_netconf_server
+ssh root@<OLT> "chmod 755 /usr/bin/bcmolt_netconf_server && systemctl restart netconf-polt.service && systemctl status netconf-polt.service --no-pager"
+```
+
+整包升级用 `bitbake xpon-olt-bundle` + RAUC 刷机。
+
+## 验证（DbgCli）
+
+NETCONF 调试 CLI 中只输入 `xpon` 回车：**应打印 Usage，不应 SIGSEGV**。
+
+```bash
+journalctl -u netconf-polt.service -b --no-pager | tail
+```
+
+## Coredump + 宿主 GDB
+
+1. 解压 `hank-olt-image-exs1610-<build>.dbg.tar.bz2` 与 rootfs 到同一 `DBGROOT`。
+2. `gdb`: `set debuginfod off`, `set sysroot <DBGROOT>`, `set solib-search-path <DBGROOT>/usr/lib:<DBGROOT>/usr/lib/.debug`, `file <DBGROOT>/usr/bin/bcmolt_netconf_server`, `core <core>`.
