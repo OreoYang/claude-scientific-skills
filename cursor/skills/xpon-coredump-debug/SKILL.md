@@ -1,259 +1,135 @@
 ---
 name: xpon-core-dump-debug
-description: This skill should be used when the user needs to "debug core dump", "analyze xpon crash", "debug bcmolt_netconf_server", "analyze segmentation fault", or needs guidance on GDB core dump analysis for embedded Linux systems.
-version: 1.3.1
+description: >-
+  Debug XPON core dumps (bcmolt_netconf_server, lag, bcmoni): setup DBGROOT,
+  decrypt support-info-logs, GDB backtrace, root-cause analysis. Use when the
+  user mentions core dump, coredump, SIGSEGV, segmentation fault, xpon crash,
+  or bcmolt_netconf_server crash on embedded Linux.
+version: 2.0.1
 ---
 
-# xpon Core Dump Debug Skill
+# xpon Core Dump Debug
 
-Complete workflow for debugging core dumps from bcmolt_netconf_server and xpon-related embedded Linux applications.
+Workflow for debugging core dumps from bcmolt_netconf_server and other XPON embedded Linux services.
 
-## Quick Start
+## Skill Path (do not hardcode `~/.cursor/...`)
 
-### Unpacked Core Dump
+Scripts live next to this file under `scripts/`. **Never** bake in a fixed home path like `~/.cursor/skills/xpon-coredump-debug` — installs differ (Cursor personal, Claude Code, project `.cursor/skills/`).
 
-```bash
-# Set these to paths inside the workspace, not /tmp (see "Extract Debug Symbols" below)
-DBGROOT=$(pwd)/dbgroot
-CORE=<path-to-core-file>
+Resolve `SKILL_ROOT` once per session, in order:
 
-/usr/bin/gdb --nh --nx -q -batch \
-  -ex "set debuginfod enabled off" \
-  -ex "set auto-load safe-path /" \
-  -ex "set sysroot $DBGROOT" \
-  -ex "file $DBGROOT/usr/bin/bcmolt_netconf_server" \
-  -ex "core $CORE" \
-  -ex "thread 1" \
-  -ex "bt 40"
-```
+1. Directory containing this `SKILL.md` (path from when the skill was loaded)
+2. `$XPON_COREDUMP_SKILL_ROOT` if set
+3. First existing directory among:
+   - `$HOME/.cursor/skills/xpon-coredump-debug`
+   - `$HOME/.claude/skills/xpon-core-dump-debug`
+   - `<workspace>/.cursor/skills/xpon-coredump-debug`
 
-### Support-Info-Logs Archive
+Then define:
 
 ```bash
-# Extract and decrypt (requires /decrypt_keys/dorado_private.pem)
-# IMPORTANT: use the workspace/current working directory, NOT /tmp.
-# /tmp is wiped on reboot; placing artifacts in the workspace keeps them
-# persistent and lets the user inspect them directly in the IDE.
-WORKDIR=$(pwd)/support-debug
-mkdir -p "$WORKDIR" && cd "$WORKDIR"
-tar zxf <archive>.tar.gz
-cd debugdump && entra_rpd_decrypt encrypted.tar.gz.enc
-tar zxf encrypted.tar.gz
-cd encrypted/CoreDump/coredump/
-unzstd --rm *.zst
-CORE=$(ls core.* | head -1)
-
-# Analyze
-gdb -ex "set sysroot $DBGROOT" -ex "core $CORE"
+# Option A: agent already knows SKILL_ROOT from loaded skill path
+# Option B: derive from any script (works regardless of install location)
+eval "$(bash "$SKILL_ROOT/scripts/skill_root.sh")"
 ```
 
-## Environment Setup
+All commands below use `"$SKILL_ROOT/scripts/<name>.sh"`. In tables, paths are relative to `SKILL_ROOT` (e.g. `scripts/setup_dbgroot.sh`).
 
-### Required Tools
+## Before You Start
 
-| Tool | Purpose |
+1. Read [prerequisites.md](prerequisites.md) — tools, keys, build artifacts.
+2. Place working directories under the **workspace** (`$(pwd)/dbgroot`, `$(pwd)/support-debug`), never `/tmp`.
+
+## Workflow
+
+```
+Task Progress:
+- [ ] Resolve SKILL_ROOT
+- [ ] Step 1: Setup DBGROOT (debug symbols + rootfs)
+- [ ] Step 2: Obtain core file (direct or from support-info-logs)
+- [ ] Step 3: Verify environment
+- [ ] Step 4: Run GDB backtrace
+- [ ] Step 5: Deep analysis + report
+```
+
+### Step 1: Setup DBGROOT
+
+Run from the workspace directory where `*.dbg.tar.bz2` and `*.raucb` live:
+
+```bash
+bash "$SKILL_ROOT/scripts/setup_dbgroot.sh" \
+  --dbgroot "$(pwd)/dbgroot" \
+  /path/to/*.dbg.tar.bz2 \
+  /path/to/*.raucb
+```
+
+`RAUCB` is optional if DBGROOT already has a complete rootfs.
+
+### Step 2a: Core from support-info-logs archive
+
+```bash
+bash "$SKILL_ROOT/scripts/unpack_support.sh" \
+  --workdir "$(pwd)/support-debug" \
+  /path/to/support-info-logs-*.tar.gz
+```
+
+The script prints `CORE=...` on success. Use that path in later steps.
+
+To pull archives from Chicago lab OLT, see `xpon-chicago-lab-debug` skill.
+
+### Step 2b: Core file already available
+
+Skip unpack; note the core path directly.
+
+### Step 3: Verify
+
+```bash
+bash "$SKILL_ROOT/scripts/verify_dbgroot.sh" \
+  --dbgroot "$(pwd)/dbgroot"
+
+CORE=/path/to/core.*
+BINARY=$(bash "$SKILL_ROOT/scripts/detect_binary.sh" \
+  "$CORE" "$(pwd)/dbgroot")
+echo "BINARY=$BINARY"
+```
+
+### Step 4: GDB backtrace
+
+```bash
+bash "$SKILL_ROOT/scripts/gdb_bt.sh" \
+  --dbgroot "$(pwd)/dbgroot" \
+  --binary "$BINARY" \
+  --depth 40 \
+  "$CORE"
+```
+
+For interactive GDB, add `--interactive` or run gdb manually with the same `sysroot` / `file` settings (see [reference.md](reference.md)).
+
+### Step 5: Deep analysis
+
+1. `frame 1` on crash thread; `info args`, `info locals`
+2. `info sharedlibrary` — symbols must show **Yes**
+3. For ONU/OMCI crashes: `thread apply all bt` (see [reference.md](reference.md))
+4. Cross-check source in workspace `externalsrc` or `$DBGROOT/usr/src/debug`
+5. Write report using template in [examples/sample-report.md](examples/sample-report.md)
+
+## Utility Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/skill_root.sh` | Print `export SKILL_ROOT=...` for the install that contains it |
+| `scripts/setup_dbgroot.sh` | Extract `*.dbg.tar.bz2` + optional `*.raucb` → DBGROOT |
+| `scripts/unpack_support.sh` | Decrypt/extract support-info-logs → core file |
+| `scripts/verify_dbgroot.sh` | Pre-flight: tools, symbols, stripped/unstripped pairs |
+| `scripts/detect_binary.sh` | Map `core.*` filename → executable under DBGROOT |
+| `scripts/gdb_bt.sh` | Batch GDB backtrace with standard XPON settings |
+
+**Always execute** these scripts via `bash`; do not re-implement their logic inline unless a script flag is missing.
+
+## Additional Resources
+
+| File | Content |
 |------|---------|
-| `gdb` | GNU Debugger |
-| `entra_rpd_decrypt` | Decrypt encrypted archives (uses `/decrypt_keys/dorado_private.pem`) |
-| `unzstd` | Decompress .zst files |
-
-### Required Files
-
-| File | Purpose |
-|------|---------|
-| `*.dbg.tar.bz2` | Debug symbols package |
-| `*.raucb` | RAUC bundle with rootfs |
-| `support-info-logs-*.tar.gz` | Encrypted core dump archive |
-
-### Extract Debug Symbols
-
-```bash
-# IMPORTANT: place DBGROOT inside the workspace/current working directory,
-# NOT under /tmp. This keeps the rootfs and debug symbols persistent across
-# reboots and lets the user browse them directly in the IDE.
-DBGROOT=$(pwd)/dbgroot
-mkdir -p "$DBGROOT"
-
-# Extract debug symbols
-tar -xjf *.dbg.tar.bz2 -C "$DBGROOT"
-
-# Extract RAUC bundle rootfs
-mkdir -p "$DBGROOT/rauc_temp"
-unsquashfs -f -d "$DBGROOT/rauc_temp" *.raucb
-tar -xjf "$DBGROOT/rauc_temp"/*.rootfs.tar.bz2 -C "$DBGROOT"
-rm -rf "$DBGROOT/rauc_temp"
-
-# Verify both stripped and unstripped exist
-file $DBGROOT/usr/bin/bcmolt_netconf_server       # stripped
-file $DBGROOT/usr/bin/.debug/bcmolt_netconf_server # with debug_info
-```
-
-**Critical**: Both stripped and unstripped versions must exist for symbol loading.
-
-## Common Core Types
-
-| Pattern | Service |
-|---------|---------|
-| `core.bcmolt_netconf.*` | NETCONF server |
-| `core.lag.*` | LAG daemon |
-| `core.bcmoni*.*` | BCMMONI daemon |
-| `core.bcmolt*.*` | BCMOLT services |
-
-## GDB Commands
-
-| Command | Purpose |
-|---------|---------|
-| `bt [n]` | Backtrace |
-| `thread N` | Switch thread |
-| `frame N` | Switch frame |
-| `info threads` | List threads |
-| `info sharedlibrary` | Symbol status |
-| `info locals` | Local variables |
-| `info args` | Function arguments |
-| `p var` | Print variable |
-| `x/ngx addr` | Examine memory |
-
-## Analysis Workflow
-
-1. **Get backtrace**: `bt 40`
-2. **Switch to crash frame**: `frame 1`
-3. **Examine variables**: `info args`, `info locals`
-4. **Check symbols**: `info sharedlibrary`
-
-## Common Issues
-
-| Issue | Solution |
-|-------|----------|
-| Could not load symbols | Verify `.debug/` subdirectory has unstripped files |
-| ? in backtrace | Check BuildID: `readelf -n file \| grep BuildID` |
-| entra_rpd_decrypt not found | Check `/usr/local/bin/entra_rpd_decrypt` |
-| Cannot access memory | Use-after-free or invalid pointer |
-
-## ONU/OMCI Crash Patterns
-
-| Pattern | Function | Issue |
-|---------|----------|-------|
-| `onu_context->XXX` | omci_svc_state_* | Context freed during async operation |
-| `onu_cfg->XXX` | omci_svc_onu_* | NULL after ONU deactivation |
-| Race condition | State machine callbacks | Concurrent activation/deactivation |
-
-### Use-After-Free Detection
-
-```bash
-# Check pointer validity
-p <ptr>
-x/10gx <ptr>
-
-# Check all threads for race
-thread apply all bt
-
-# Find ONU source files
-find $DBGROOT/usr/src/debug -path "*/libomcisvc/*.c"
-```
-
-### Key Indicators
-
-- Pointer address looks "odd" (e.g., ends in small hex like 0x3e8)
-- Cannot access memory at address
-- Crash in state machine callback with async callstack
-- Multiple threads manipulating ONU state
-
-## Case Studies Reference
-
-### dbg_xpon_handler SIGSEGV
-- **Location**: `bbf-debug.c:235`
-- **Cause**: `argv[0]` was NULL, not checked before `strcmp()`
-- **Fix**: Add null check: `if (argc < 1 \|\| !argv[0])`
-
-### omci_svc_state_up_sequence_end_event_start SIGSEGV
-- **Location**: `omci_svc_onu.c:3587`
-- **Cause**: Use-after-free of `onu_context` during async callback
-- **Pattern**: ONU activation completes while deactivation in progress
-
-## Pre-Flight Checklist
-
-- [ ] DBGROOT and support-debug are under the **workspace directory**, not `/tmp` (persistent + user-accessible)
-- [ ] Core file exists and readable
-- [ ] DBGROOT has complete filesystem
-- [ ] Debug symbols in `.debug/` subdirectories
-- [ ] Stripped files in normal directories
-- [ ] `set sysroot` points to DBGROOT
-- [ ] `info sharedlibrary` shows "Yes" for main libraries
-
-## Analysis Report Template
-
-Use this template for final coredump analysis reports:
-
-```markdown
-# Coredump Analysis Report
-
-## Summary
-<one-paragraph description of crash including process, location, and root cause>
-
-## Environment
-| Item | Value |
-|------|-------|
-| Build | <build version> |
-| Platform | <hardware/platform> |
-| PID | <process id> |
-| Crash thread | <thread id> |
-| Crash time | <timestamp UTC> |
-| Signal | <signal description> |
-| Fault address | <memory address> |
-
-## Complete Backtrace
-```
-#0  <function> (<args>)
-     at <source>:<line>
-#1  <function> (<args>)
-     at <source>:<line>
-...
-```
-
-## Root Cause
-
-### Crash Location
-<source>:<line> — description of code
-
-```c
-// <source>:<line>
-<problematic code>
-```
-
-### Why the Pointer is Invalid
-<explanation of memory corruption, use-after-free, or invalid pointer>
-
-### Race Condition Trigger (if applicable)
-<step-by-step sequence of events leading to crash>
-
-### Call Chain Summary
-<summary of call stack with key functions>
-
-## Fix Applied
-
-**File**: <source file>
-
-<description of fix with diff if applicable>
-
-```c
-// Before/After comparison
-```
-
-## Reproduction Conditions
-<conditions required to reproduce the crash>
-
-## Severity / Impact
-<service impact and affected components>
-```
-
-### Example Report Key Elements
-
-| Section | Content |
-|---------|---------|
-| Summary | Process, crash location, root cause (1 paragraph) |
-| Environment | Build, platform, PID, thread, time, signal, fault address |
-| Backtrace | Full call stack with source/line info |
-| Root Cause | Crash location, pointer analysis, race condition, call chain |
-| Fix | File changed, diff, explanation |
-| Reproduction | Specific conditions to trigger crash |
-| Severity | Service impact, affected components |
+| [prerequisites.md](prerequisites.md) | Host tools, decrypt key, build artifacts |
+| [reference.md](reference.md) | GDB commands, core types, ONU patterns, troubleshooting |
+| [examples/sample-report.md](examples/sample-report.md) | Filled-in analysis report example |

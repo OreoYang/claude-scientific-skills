@@ -1,1 +1,271 @@
-../../build-xpon/workspace/sources/netconf-polt/docs/netconf-polt-mutex-rule.mdc
+---
+description: Netconf-polt multi-layer mutex rules — L1–L7 lock order, execution-plane sysrepo rules (OPR/CFG/ASYNC), two-phase snapshot. Use for bbf-xpon locks, oper-get/push, metrics/BAL, concurrency review.
+globs:
+  - build-xpon/workspace/sources/netconf-polt/**
+  - "**/netconf-polt/**"
+alwaysApply: false
+---
+
+# Netconf-polt mutex rule
+
+Developer mandate for lock contention and deadlock avoidance in `netconf-polt` / `bbf-xpon`.
+
+**Code:** `bbf-xpon-internal.h` (L1–L7 ladder), `bbf-xpon-channel-termination.c`, `bbf-xpon-onus-onu.c`, `ipc-metrics-mgr-internal.h`
+
+## Lock inventory (L1–L7)
+
+| L | Lock | API | Recursive | Protects |
+|---|------|-----|-----------|----------|
+| L1 | `nc_config_lock` | config path | Y | Transactions; brief snapshots (~100 µs) |
+| L2 | `xpon_obj_config_lock` | inside `xpon_object_*` only | Y | `redis_dict[]` name hash |
+| L3 | `xpon_cterm_config_lock` | `xpon_cterm_list_lock()` | Y | `cterm_list`; `cterm_by_id_array[]` **slot mutate**; CT L3 fields (`defects_status`, `interface_up`, `rgt_running`, …). L6 may **read** array for aux-only |
+| L4 | `onu_tmpl_config_lock` | `XPON_ONU_TMPL_CONFIG_GUARD()` | Y | `onus_rb` instance index |
+| L5 | `onu->onu_inst_config_rwlock` | `xpon_onus_onu_lookup_*lock` | N | template ONU overlay |
+| L6 | `vani_per_pon_runtime_lock[b]` | `XPON_VANI_RUNTIME_GUARD` | Y | `v_ani_list`, `v_ani_array`, `discovered_onu_list[pon]`; **CT runtime aux** on bound CT (`sufi_affected_onus`, `online_onus`, `flap_onus`, `rgt_report.rogue_onus`) |
+| L7 | `onu_runtime_rwlock` | `onu_runtime_rdlock()` | N | `ani_list`, `xpon_ani` PM |
+
+Y = `bcmos_mutex` (task-aware re-lock). N = `pthread_rwlock_t` (never double-acquire).
+
+**Traps:**
+
+- L2 ≠ L3. `xpon_object_get*` silently takes L2 — in L3/L6/L7 paths that is F-15 (+ often F-6).
+- `vani_per_pon_runtime_lock[32]` = UNASSIGNED; `pon_ni == 255` → `xpon_vani_runtime_lock_bucket()` / `xpon_v_ani_bucket()`.
+- `hardware_list` — L1 snapshot only (F-9).
+- O-6 recursive ≠ permission for slow I/O or >2 locks; outer L6 re-lock can mask inner unlock (audit path).
+- Need both v-ANI and ani: L6 snap → unlock → L7 snap → unlock (sequential, not nested).
+
+## CT registry: `cterm_list` vs `cterm_by_id_array`
+
+| Structure | Key | Use |
+|-----------|-----|-----|
+| `cterm_list` | YANG interface name | Config enumerate, cpart/cpair walks, delete by name |
+| `cterm_by_id_array[pon_ni]` | BAL `pon_ni` | Indication/timer O(1) lookup; one bound CT per PON slot |
+
+Not equivalent: CT can be in `cterm_list` before `apply` binds `pon_ni` (array slot still NULL).
+
+## CT mixed struct (`xpon_channel_termination`)
+
+One object, two **field domains** — choose lock from **what you dereference**, not from which lookup helper you call.
+
+### Step 1 — classify every `cterm->` field the path touches
+
+| Field domain | Examples | Lock |
+|--------------|----------|------|
+| **L3** registry / config / LOS / RGT state | `defects_status`, `interface_up`, `admin_state`, `channel_state`, `channel_pair_ref`, `notifiable_presence_states`, `flap_cfg`, `rgt_cfg` / `rgt_on_dmd` / `rgt_stop`, `rgt_running`, `rgt_report` **scalars** (name/mode/status/…), `onu_discover_hammer_flag`, array slot bind/unbind | **L3** `xpon_cterm_list_lock()` |
+| **L6** runtime aux lists | `sufi_affected_onus`, `online_onus`, `flap_onus`, `rgt_report.rogue_onus` | **L6** `XPON_VANI_RUNTIME_GUARD(pon_ni)` |
+| **Both** | e.g. LOS check + walk `online_onus` | **L3** then nest **L6** (short); unlock before IPC/BAL |
+
+**`rgt_report` split:** scalars → L3; `rogue_onus` list → L6. Do not treat the whole `rgt_report` as one domain.
+
+**Review trap:** `cterm != NULL` is insufficient — list dereferenced fields and match the row above.
+
+### Step 2 — resolve `cterm*` (follows domain; API is not the primary decision)
+
+| Field domain | Pattern |
+|--------------|---------|
+| L3 only | Hold **L3**; `xpon_cterm_get_by_id()`; snap scalars if unlocking before use |
+| L6 aux only | Hold **L6**; `cterm_by_id_array[pon_ni]`; local `cterm*` valid **only while L6 held** |
+| Both | L3 lookup + L3-field work, then nest L6 for aux |
+
+`xpon_cterm_get_by_id()` does not take a lock — it is an L3-registry helper. Calling it without L3 and then reading L3 fields is F-11 regardless of return value.
+
+**Aux-only timer note** (`_cterm_flap_detection_timeout_handler`): L6 + array is safe because `xpon_cterm_delete` clears the array slot under L3 first, then frees aux only after taking the same L6. Do **not** L3-snap-then-L6 for aux-only (UAF window); do **not** reuse L6+array for paths that read L3 fields.
+
+## Domain data source (no cross-layer L2 read)
+
+Hold lock → read **that layer's list**. No `xpon_object_get*` from L3/L6/L7 (`dictFind`, no lock).
+
+| Lock | Read | Not |
+|------|------|-----|
+| L3 | `cterm_list`, `cterm_by_id_array` (registry / L3 fields) | L2 hash; CT aux lists |
+| L6 | `v_ani_list[b]`, `v_ani_array`, `cterm->{sufi,online,flap}_onus`, `rgt_report.rogue_onus` on bound CT | `xpon_object_get*` |
+| L7 | `ani_list` | `xpon_object_get_by_key_and_type` |
+| L1 | L2 hash OK (brief, config) | — |
+
+Snapshot = pointer lifetime (F-8), not wrong source. Oper-get: same domain list for Named/Unnamed.
+
+## Lock order
+
+`L1 → L2 → L3 → L4 → L5 → L6 → L7`. `lookup_*` releases L4 before return (caller holds L5).
+
+| ID | Rule |
+|----|------|
+| O-1 | `lookup_*` releases `onu_tmpl_config_lock` before return |
+| O-2 | Never `lookup_*` under L6 or L1 |
+| O-3 | Avoid `lookup_*` under L1 unless short snap, no 3rd lock |
+| O-4 | Delete: `RB_REMOVE` → `wrlock` → teardown |
+| O-5 | Rebucket: two L6, lower index first |
+| O-6 | L1 / L2 / L3 / L4 / L6 recursive — same-thread re-lock OK; still ≤2 locks, no slow I/O |
+| O-7 | L5 / L7 **not** recursive — never double-acquire |
+| O-9 | CT aux lists on `xpon_channel_termination` are **L6**, not L3 |
+| O-10 | Never **L6 → L3** (deadlock with CT delete) |
+
+**Allowed:** L3→L6 (CT delete, LOS + `online_onus`). **Forbidden:** L3→L1, L6→L3, 3+ locks (F-6).
+
+## Execution planes (sysrepo)
+
+| Plane | Rule |
+|-------|------|
+| **OPR-1** Oper-push | No L1–L7 during `sr_set_item*` / `sr_apply_changes`. Phase 1: snap → unlock; Phase 2: sysrepo |
+| **OPR-2** Oper-get | ≤2 locks, short snap. No BAL, no oper-push, no `lookup_*` under L6 |
+| **CFG-1** Config | L1 (+L5) may use running `sr_get_*`. No oper-push under L1 |
+| **ASYNC-1** Indication/metrics | Phase 1 snap → Phase 2 BAL/event/oper-push |
+
+**AB-BA (operational):** thread holds app lock → oper-push → sysrepo shmmod → oper-get callback needs same app lock → deadlock. OPR-1 prevents this.
+
+## Golden rules
+
+1. ≤2 locks (dual L6 rebucket excepted).
+2. No slow I/O under any L1–L7 (BAL, sleep, protobuf, operational sysrepo).
+3. Two-phase snapshot: copy under lock, work outside.
+
+## Reduce locks
+
+| Instead of | Do |
+|------------|-----|
+| Pointer after unlock | Snapshot scalars/strings |
+| L1 + foreach + BAL | Phase 1 snap; Phase 2 BAL |
+| `foreach` + BAL in cb | Cb = snap only |
+| Global v-ANI scan | Per-bucket `XPON_VANI_RUNTIME_GUARD(b)` loop |
+| `lookup_*` under L6 | Snap under L6, unlock, `lookup_rdlock` |
+| L6/L7 oper-get via L2 | Walk `v_ani_list` / `ani_list` (F-15) |
+| Aux-only timer nested L3→L6 | L6 only — path touches aux fields only |
+| Timer/indication reads L3 CT fields without L3 | L3 snap scalars first; lock choice from field domain |
+
+## Examples (good / bad)
+
+### F-15 — domain list, not L2 hash
+
+```c
+/* BAD — oper-get / L6: xpon_object_get* → dictFind without domain lock */
+XPON_VANI_RUNTIME_GUARD(pon);
+xpon_object_get_by_key_and_type(name, XPON_OBJ_TYPE_V_ANI, &hdr);
+
+/* GOOD — xpon_cterm_state_get_cb, xpon_ani_collect_current_stats */
+XPON_VANI_RUNTIME_GUARD(pon);
+STAILQ_FOREACH_SAFE(hdr, &v_ani_list[pon], next, tmp) {
+    if (strcmp(hdr->name, name) != 0) continue;
+    snap = *(xpon_v_ani *)hdr;
+    break;
+}
+/* unlock — then BAL / populate */
+```
+
+### F-5 / O-2 — no lookup under L6
+
+```c
+/* BAD */
+XPON_VANI_RUNTIME_GUARD(pon);
+onu = xpon_onus_onu_lookup_rdlock(v_ani->onu_name);
+
+/* GOOD — xpon_v_ani_sync_time_to_onu */
+XPON_VANI_RUNTIME_GUARD(pon);
+/* copy pon_ni, onu_id into sync_keys[] */
+/* unlock */
+xpon_onus_onu_lookup_rdlock(name); /* after L6 released */
+```
+
+### F-7 / ASYNC-1 — no BAL under lock
+
+```c
+/* BAD */
+XPON_VANI_RUNTIME_GUARD(pon);
+bcmonu_mgmt_cfg_set(...);
+
+/* GOOD — _onu_deactivate, DFI indication */
+XPON_VANI_RUNTIME_GUARD(pon);
+/* update state / snapshot */
+/* unlock */
+xpon_schedule_deactivate_onu(...) / bcmonu_mgmt_cfg_set(...);
+```
+
+### F-13 / OPR-1 — no oper-push under lock
+
+```c
+/* BAD — AB-BA with oper-get */
+XPON_VANI_RUNTIME_GUARD(pon);
+sr_set_item_str(op_session, xpath, value, NULL, 0);
+
+/* GOOD — _handle_rssi_measurement_completed_task */
+XPON_VANI_RUNTIME_GUARD(pon);
+/* update memory */
+/* unlock */
+sr_set_item_str(op_session, xpath, value, NULL, 0);
+```
+
+### F-8 — snapshot, not dangling pointer
+
+```c
+/* BAD — hdr freed or list changed after unlock */
+XPON_VANI_RUNTIME_GUARD(pon);
+name_out = hdr->name;
+/* unlock */
+use(name_out);
+
+/* GOOD — stack struct copy */
+v_ani_snap = *(xpon_v_ani *)hdr;
+/* unlock */
+use(v_ani_snap.pon_ni, v_ani_snap.onu_id); /* not v_ani_snap.hdr.name if struct was memcpy'd */
+```
+
+### F-11 — CT: lock from field domain (timer / indication)
+
+```c
+/* BAD — touches L3 fields (defects_status) with no L3 held */
+cterm = xpon_cterm_get_by_id(olt, pon_ni);
+if (cterm->defects_status & LOS) ...
+
+/* GOOD — L3 domain only (_onu_lost_timeout_handler: interface_up, LOS, polling_period) */
+xpon_cterm_list_lock();
+cterm = xpon_cterm_get_by_id(olt, pon_ni);
+polling_period = ...; /* copy L3-domain scalars */
+xpon_cterm_list_unlock();
+/* separate L6 section for discovered_onu_list (L6 domain) */
+
+/* GOOD — L6 aux domain only (_cterm_flap_detection_timeout_handler: flap_onus) */
+XPON_VANI_RUNTIME_GUARD(pon_ni);
+cterm = cterm_by_id_array[pon_ni];
+/* only cterm->flap_onus (and other L6 aux); never interface_up / defects_status here */
+```
+
+## Blacklist
+
+| ID | Pattern |
+|----|---------|
+| F-5 | `lookup_*` under L6 |
+| F-6 | 3+ locks |
+| F-7 | BAL / OMCI / sleep under any L1–L7 |
+| F-8 | Pointer use after unlock without snap |
+| F-9 | Walk `hardware_list` without L1 snapshot (metrics/timer) |
+| F-10 | BAL in `xpon_onus_onu_foreach` cb |
+| F-11 | Timer/indication touches CT L3 fields without L3, or CT L6 aux without L6 |
+| F-12 | Bare `v_ani_array[][]` read from metrics/timer without L6 snap |
+| F-13 | Operational sysrepo under L1–L7 |
+| F-14 | BAL in oper-get under L3/L6 (F-7 subset) |
+| F-15 | L3/L6/L7 uses L2 `xpon_object_get*` not domain `*_list` |
+
+## Review checklist
+
+1. Lock maps to L1–L7? ≤2 locks? Order OK?
+2. `lookup_*` paired with `xpon_onus_onu_rwunlock` on all paths?
+3. Execution plane: OPR-1/2, CFG-1, ASYNC-1?
+4. Oper-push only after GUARDs released?
+5. Two-phase snap on non-config threads?
+6. `pon_ni == 255` → `xpon_vani_runtime_lock_bucket()` / `xpon_v_ani_bucket()`?
+7. Domain list not L2 hash (F-15)?
+8. CT path: list every `cterm->` field touched — L3 domain under L3, L6 aux under L6, both → L3→L6 nest?
+
+## Comments in `netconf-polt` source (see also `xgs-coding.mdc` — Code comments)
+
+In `.c` / `.h`, document locks **self-contained** — name the API and level (`xpon_cterm_list_lock` / L3, `XPON_VANI_RUNTIME_GUARD` / L6). **Do not** cite this page's rule IDs (`O-9`, `F-13`, `OPR-1`) or `fixed.md` section numbers in code.
+
+Lock-free helpers (`*_add`, `*_delete`, list walkers): one block comment — **caller must hold …** — on the helper group and on the `.h` declaration when exported.
+
+## Verify grep
+
+```bash
+rg 'pthread_rwlock_(rd|wr)lock\(&.*->onu_inst_config_rwlock\)' netconf-polt --glob '!**/bbf-xpon-onus-onu.c'
+rg 'onu_config_lock' netconf-polt/netconf_server/modules/bbf-xpon
+rg 'xpon_object_get|xpon_v_ani_get_by_name' netconf-polt/netconf_server/modules/bbf-xpon/bbf-xpon-v-ani.c bbf-xpon-ani.c
+rg 'xpon_cterm_get_by_id|cterm_by_id_array' netconf-polt/netconf_server/modules/bbf-xpon
+```

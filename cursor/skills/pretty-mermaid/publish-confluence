@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Publish Markdown+Mermaid to Confluence (wrapper).
+set -euo pipefail
+SKILL_ROOT="$(cd "$(dirname "$0")" && pwd)"
+exec python3 "$SKILL_ROOT/confluence/publish.py" "$@"

@@ -48,7 +48,7 @@ Implement in editable repos: `netconf-polt/balapi`, `netconf-polt`, `xpon-yang`.
 
 ## 5. Code style & DbgCli
 
-**Style:** read surrounding code before edit; minimal diff.
+**Style:** read surrounding code before edit; keep edits scoped to the task (see §7 for refactor diff discipline — **coding phase only**).
 
 **DbgCli (DBC)** — add when feature has inspectable runtime state:
 
@@ -58,6 +58,8 @@ Implement in editable repos: `netconf-polt/balapi`, `netconf-polt`, `xpon-yang`.
 | protocol-handler | `xpon-apps/protocol-handler/common/src/ph_dbg.c` |
 
 Handler: validate `argc`/`argv`; empty input → print Usage, return `RET_OK` (**no SIGSEGV**). Register in `gCmsDbgCliCommands[]` + update help text. API: `xpon-libs/debug/include/dbg.h`.
+
+**`printf` only here** — business paths (indication, routers, timers) must use `NC_LOG_*` / `dev_log`, not `printf` (PTY back-pressure, ALU02082450). Module stores counters; DbgCli handler prints tables. See `xgs-logging.mdc`.
 
 ---
 
@@ -69,9 +71,11 @@ Logic / memory safety / YANG alignment → code style → DbgCli → CR text →
 
 ---
 
-## 7. Minimal diff for review (mandatory on refactors)
+## 7. Minimal diff for review (coding phase only; mandatory on refactors)
 
-Goal: reviewer sees **only the intentional logic change** (lock, data structure, API), not a reformatting avalanche.
+**Scope:** applies when **writing or editing code** (implementation / refactor / CR prep). **Does not apply** to framework design, solution analysis, JIRA/Confluence docs, or Option A vs B trade-off discussions — those should explore the better architecture freely without constraining choices to “smallest possible code change.”
+
+Goal (coding): reviewer sees **only the intentional logic change** (lock, data structure, API), not a reformatting avalanche.
 
 ### 7.1 Preserve control-flow shape
 
@@ -123,8 +127,8 @@ If many unchanged lines show as modified, fix indentation/wrapping before reques
 ## Agent summary
 
 1. Task breakdown → confirm `Oreo/` branches → never edit read-only repos.
-2. Code with module-matched style; add DbgCli when appropriate.
-3. Refactors: minimal diff — preserve `do-while`/brace shape; wrap locks without re-indenting bodies.
+2. **Design / analysis:** pick the right architecture (no minimal-diff constraint).
+3. **Coding:** module-matched style; DbgCli when appropriate; refactors use §7 minimal diff — preserve `do-while`/brace shape; wrap locks without re-indenting bodies.
 4. netconf-polt locks/sysrepo: check execution plane (OPR-1 oper-push unlock-first; OPR-2 oper-get snapshot-only).
 5. `bitbake` affected recipes; verify on OLT if needed.
 6. Draft CR + commit message.

@@ -1,9 +1,0 @@
----
-description: "XGS PON log levels, module macros, context requirements, and prohibited patterns"
-globs: **/*.{c,h,cpp,hpp}
----
-
-# XGS PON Logging Standards
-
-> **Reference**: https://confluence.vecima.com/pages/viewpage.action?pageId=449020772&spaceKey=PH&title=XGS-PON+Log+Guidelines
-> **Version**: 1.0
