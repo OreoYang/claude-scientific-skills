@@ -25,6 +25,8 @@ python3 ~/.cursor/skills/pretty-mermaid/confluence/publish.py \
 
 Do **not** use raw `render.mjs` for Confluence — use `confluence/mermaid.py` (dark edges, sequence tints, layout review).
 
+**New pages:** create empty page in Confluence UI first; then `publish.py`. Content layout: `references/PAGE_TEMPLATE.md`. Publish mechanics: `references/CONFLUENCE.md` (`preserve_before_heading`, `skip_sections`, anti-patterns).
+
 ## Quick Start
 
 ### Render a Single Diagram
@@ -483,6 +485,8 @@ Executable Node.js scripts for rendering operations:
 
 ### references/
 Documentation to inform diagram creation:
+- `PAGE_TEMPLATE.md` — **Confluence page structure** (Parts, tables, figure budget; QoS guide as reference)
+- `CONFLUENCE.md` — publish workflow, `*.publish.json`, safe API patterns
 - `THEMES.md` - Detailed theme reference with examples
 - `DIAGRAM_TYPES.md` - Comprehensive syntax guide for all diagram types
 - `api_reference.md` - beautiful-mermaid API documentation

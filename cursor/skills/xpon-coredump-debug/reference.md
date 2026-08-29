@@ -52,13 +52,23 @@ readelf -n "$DBGROOT/usr/bin/bcmolt_netconf_server" | grep -i buildid
 readelf -n "$CORE" | grep -i buildid
 ```
 
+## support-info-logs Decrypt Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| `entra_rpd_decrypt not found` | Install tool; check `/usr/local/bin/entra_rpd_decrypt` |
+| `Missing argument for option: d` | Drop `-d` / `-ed` flags; run `entra_rpd_decrypt encrypted.tar.gz.enc` from `debugdump/` |
+| Decrypt fails / no `encrypted.tar.gz` | Confirm `/decrypt_keys/dorado_private.pem` exists and is readable |
+| Used `ENC_AES_KEY` as key | Wrong key type — host tool uses RSA key at `/decrypt_keys/dorado_private.pem` automatically |
+| `No core.* files found` | Archive may have no crash (`encrypted/CoreDump/list.txt` → "There are no coredumps"); logs in `encrypted/` are still valid |
+| Core is `*.zst` | Run `unzstd --rm encrypted/CoreDump/coredump/*.zst` after tar extract |
+
 ## Common Issues
 
 | Issue | Solution |
 |-------|----------|
 | Could not load symbols | Check `usr/bin/.debug/` has unstripped binary with `debug_info` |
 | `?` in backtrace | BuildID mismatch — use matching `*.dbg.tar.bz2` + `*.raucb` |
-| `entra_rpd_decrypt not found` | Install tool; check `/usr/local/bin/entra_rpd_decrypt` |
 | Cannot access memory | Likely use-after-free or corrupt pointer |
 | Wrong binary / no threads | Re-run `detect_binary.sh`; verify core is complete |
 

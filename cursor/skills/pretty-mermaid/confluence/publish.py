@@ -19,6 +19,7 @@ import urllib.request
 from pathlib import Path
 
 from creds import load_confluence_auth
+from ascii_art import AsciiArtError, is_box_diagram, validate_ascii_art_strict
 from mermaid import (
     mermaid_diagram_block,
     normalize_mermaid_br,
@@ -54,6 +55,16 @@ def code_macro(body: str, language: str = "none") -> str:
         f"<ac:plain-text-body><![CDATA[{body}]]></ac:plain-text-body>"
         "</ac:structured-macro>"
     )
+
+
+def normalize_fenced_code(raw: str) -> str:
+    """Trim empty lines around a fenced block; preserve trailing spaces on content lines."""
+    lines = raw.split("\n")
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines)
 
 
 def format_inline_md(text: str) -> str:
@@ -151,6 +162,14 @@ def render_prose(text: str) -> str:
     return "\n".join(chunks)
 
 
+def _prose_skips_next_fence(prose: str) -> bool:
+    """True when prose ends with <!-- publish:skip --> or 'repo only' maintainer note."""
+    if re.search(r"<!--\s*publish:skip\s*-->\s*$", prose):
+        return True
+    tail = prose.rsplit("\n", 1)[-1].lower()
+    return "repo only" in tail and "not published" in tail
+
+
 def render_section(title: str, body: str, diagrams: DiagramRegistry) -> str:
     out = [f"<h2>{html.escape(title)}</h2>"]
     remaining = body
@@ -158,17 +177,28 @@ def render_section(title: str, body: str, diagrams: DiagramRegistry) -> str:
         m = re.search(r"```(\w+)?\n", remaining)
         if not m:
             break
-        before = remaining[: m.start()].strip()
-        if before:
-            out.append(render_prose(before))
+        before = remaining[: m.start()]
+        before_stripped = before.strip()
         lang = m.group(1) or "none"
         end = remaining.find("```", m.end())
         if end < 0:
             break
-        code = remaining[m.end() : end].strip()
+        code = normalize_fenced_code(remaining[m.end() : end])
+        if _prose_skips_next_fence(before):
+            if before_stripped:
+                out.append(render_prose(before_stripped))
+            remaining = remaining[end + 3 :].strip()
+            continue
+        if before_stripped:
+            out.append(render_prose(before_stripped))
         if lang == "mermaid":
             out.append(diagrams.next(title, code))
         else:
+            if is_box_diagram(code):
+                try:
+                    validate_ascii_art_strict(code, label=f"{title} (``` block)")
+                except AsciiArtError as e:
+                    raise AsciiArtError(f"ASCII layout check failed: {e}") from e
             out.append(code_macro(code, lang))
         remaining = remaining[end + 3 :].strip()
     if remaining:
@@ -176,14 +206,70 @@ def render_section(title: str, body: str, diagrams: DiagramRegistry) -> str:
     return "\n".join(out)
 
 
-def build_storage_html(md_text: str, intro_html: str, skip_sections: list[str], diagrams: DiagramRegistry) -> str:
+def build_sections_html(md_text: str, skip_sections: list[str], diagrams: DiagramRegistry) -> str:
     skip = set(skip_sections)
     sections_html = []
     for title, body in parse_md_sections(md_text):
         if title in skip or any(s in title for s in skip):
             continue
         sections_html.append(render_section(title, body, diagrams))
-    return intro_html + "\n".join(sections_html)
+    return "\n".join(sections_html)
+
+
+def build_storage_html(
+    md_text: str,
+    intro_html: str,
+    skip_sections: list[str],
+    diagrams: DiagramRegistry,
+    *,
+    include_intro: bool = True,
+) -> str:
+    sections = build_sections_html(md_text, skip_sections, diagrams)
+    if include_intro:
+        return intro_html + sections
+    return sections
+
+
+def find_preserve_split(published_body: str, cfg: dict) -> tuple[int, str]:
+    """Return (index, matched_anchor_html) for preserve_before_* config."""
+    exact = cfg.get("preserve_before_anchor")
+    if exact:
+        idx = published_body.find(exact)
+        if idx >= 0:
+            return idx, exact
+
+    heading = cfg.get("preserve_before_heading")
+    if heading:
+        pattern = r"<h2[^>]*>" + re.escape(heading) + r"</h2>"
+        m = re.search(pattern, published_body)
+        if m:
+            return m.start(), m.group(0)
+
+    hints = []
+    if exact:
+        hints.append(f"preserve_before_anchor={exact[:60]!r}...")
+    if heading:
+        hints.append(f"preserve_before_heading={heading!r}")
+    raise ValueError(
+        "preserve anchor not found in published body (len="
+        + str(len(published_body))
+        + "): "
+        + "; ".join(hints)
+    )
+
+
+def merge_published_prefix(published_body: str, cfg: dict, new_suffix: str) -> str:
+    """Keep wiki prefix (UI-edited intro, TOC, prose) and replace from anchor onward."""
+    idx, anchor = find_preserve_split(published_body, cfg)
+    heading = cfg.get("preserve_before_heading")
+    if heading:
+        plain_h2 = f"<h2>{heading}</h2>"
+        if new_suffix.startswith(plain_h2):
+            new_suffix = new_suffix[len(plain_h2) :].lstrip("\n")
+        new_suffix = anchor + new_suffix
+    elif not new_suffix.startswith(anchor):
+        new_suffix = anchor + new_suffix
+    return published_body[:idx] + new_suffix
 
 
 def api_get(auth: str, url: str) -> dict:
@@ -269,10 +355,41 @@ def publish(cfg: dict, *, dry_run: bool = False) -> None:
     version_comment = cfg["version_comment"]
     attachment_prefix = cfg["attachment_prefix"]
     skip_sections = cfg.get("skip_sections", [])
+    preserve_anchor = cfg.get("preserve_before_anchor") or cfg.get("preserve_before_heading")
+    title_from_page = bool(cfg.get("title_from_page"))
 
     md_text = md_file.read_text(encoding="utf-8")
     diagrams = DiagramRegistry(attachment_prefix, diagram_dir)
-    storage = build_storage_html(md_text, cfg["_intro_html"], skip_sections, diagrams)
+    include_intro = not preserve_anchor
+    sections_html = build_sections_html(md_text, skip_sections, diagrams)
+    storage = build_storage_html(
+        md_text,
+        cfg["_intro_html"],
+        skip_sections,
+        diagrams,
+        include_intro=include_intro,
+    )
+
+    auth = None
+    published_body = None
+    if preserve_anchor:
+        try:
+            auth = load_confluence_auth()
+            page = api_get(
+                auth,
+                f"{cloud}/wiki/rest/api/content/{page_id}?expand=body.storage,version,title",
+            )
+            published_body = page["body"]["storage"]["value"]
+            if title_from_page:
+                page_title = page["title"]
+            storage = merge_published_prefix(published_body, cfg, sections_html)
+            print("Merged with published prefix (content before preserve heading kept from wiki)")
+        except (urllib.error.URLError, ValueError, OSError) as e:
+            if dry_run:
+                print(f"WARNING: preserve_before_* merge skipped on dry-run ({e})", file=sys.stderr)
+            else:
+                raise
+
     storage_file.parent.mkdir(parents=True, exist_ok=True)
     storage_file.write_text(storage, encoding="utf-8")
     print(f"Wrote {storage_file} ({len(storage)} bytes)")
@@ -282,7 +399,8 @@ def publish(cfg: dict, *, dry_run: bool = False) -> None:
         print("Dry run — skipping Confluence upload")
         return
 
-    auth = load_confluence_auth()
+    if auth is None:
+        auth = load_confluence_auth()
     ensure_page_full_width(auth, page_id, cloud)
     print("Page layout: full-width")
     print("Syncing attachments...")
@@ -290,6 +408,11 @@ def publish(cfg: dict, *, dry_run: bool = False) -> None:
 
     page = api_get(auth, f"{cloud}/wiki/rest/api/content/{page_id}?expand=body.storage,version,title")
     version = page["version"]["number"]
+    if title_from_page:
+        page_title = page["title"]
+    if preserve_anchor and published_body is None:
+        published_body = page["body"]["storage"]["value"]
+        storage = merge_published_prefix(published_body, cfg, sections_html)
     payload = {
         "id": page_id,
         "type": "page",
@@ -300,6 +423,11 @@ def publish(cfg: dict, *, dry_run: bool = False) -> None:
     result = api_put(auth, page_id, cloud, payload)
     new_ver = result["version"]["number"]
     print(f"Updated page {page_id} v{version} -> v{new_ver}")
+    print(
+        "Post-publish: open Confluence Edit once — API PUT does not guarantee editor health; "
+        "do not run restore/sync-draft loops if Edit fails (create a fresh UI page instead).",
+        file=sys.stderr,
+    )
     if "page_url" in cfg:
         print(f"URL: {cfg['page_url']}")
 

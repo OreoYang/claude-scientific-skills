@@ -5,7 +5,7 @@ description: >-
   decrypt support-info-logs, GDB backtrace, root-cause analysis. Use when the
   user mentions core dump, coredump, SIGSEGV, segmentation fault, xpon crash,
   or bcmolt_netconf_server crash on embedded Linux.
-version: 2.0.1
+version: 2.0.2
 ---
 
 # xpon Core Dump Debug
@@ -67,6 +67,8 @@ bash "$SKILL_ROOT/scripts/setup_dbgroot.sh" \
 
 ### Step 2a: Core from support-info-logs archive
 
+**Automated** (decrypt `debugdump/encrypted.tar.gz.enc` → extract → `unzstd` cores):
+
 ```bash
 bash "$SKILL_ROOT/scripts/unpack_support.sh" \
   --workdir "$(pwd)/support-debug" \
@@ -74,6 +76,18 @@ bash "$SKILL_ROOT/scripts/unpack_support.sh" \
 ```
 
 The script prints `CORE=...` on success. Use that path in later steps.
+
+**Manual decrypt** (same result; see [prerequisites.md](prerequisites.md) for archive layout):
+
+```bash
+tar zxf support-info-logs-*.tar.gz -C support-debug
+cd support-debug/debugdump
+entra_rpd_decrypt encrypted.tar.gz.enc    # → encrypted.tar.gz (uses /decrypt_keys/dorado_private.pem)
+tar zxf encrypted.tar.gz
+unzstd --rm encrypted/CoreDump/coredump/*.zst
+```
+
+Do **not** pass `ENC_AES_KEY` to `entra_rpd_decrypt` — that file is OLT-side metadata, not the host RSA key.
 
 To pull archives from Chicago lab OLT, see `xpon-chicago-lab-debug` skill.
 

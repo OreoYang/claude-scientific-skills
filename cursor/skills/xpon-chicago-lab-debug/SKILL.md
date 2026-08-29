@@ -1,16 +1,16 @@
 ---
 name: xpon-chicago-lab-debug
 description: >-
-  Debug EXS1610 OLT on QD Chicago SS2 lab (10.254.20.137): SSH login, DBC,
-  daemon_attach, BAL example_user_appl, dump-stats.py, journalctl log analysis.
-  Use when debugging Chicago lab, OLT node logs, PON/ONU issues, or EXS1610
-  runtime diagnostics on 10.254.20.137.
-version: 1.1.0
+  Debug EXS1610 OLT on QD Chicago SS2 lab (10.254.20.137) and Chicago vPON
+  Manager (10.254.21.43 / chicago.vponmanager.qdlab): SSH, DBC, BAL, journalctl,
+  vPM docker Kafka/Postgres/TimescaleDB. Use when debugging Chicago lab, OLT
+  node logs, northbound Kafka telemetry, vPM, PON/ONU, or EXS1610 diagnostics.
+version: 1.2.0
 ---
 
 # XPON Chicago Lab Debug Skill
 
-Chicago SS2 实验台 OLT 节点调试工作流。所有 node 内 debug 操作需先进入 node shell。
+Chicago SS2 实验台：OLT 节点 debug 在 `10.254.20.137`；北向 vPON Manager (vPM) 在 `10.254.21.43`（`chicago.vponmanager.qdlab`）。Node 内操作先 SSH 进 OLT；Kafka / Postgres / UI 在 vPM docker-compose 里（见 §13）。
 
 **参考文档：**
 - Lab 拓扑/IP：[QD-XGS-Chicago (SS2)](https://vecima.atlassian.net/wiki/spaces/PH/pages/137273176)
@@ -26,7 +26,7 @@ Chicago SS2 实验台 OLT 节点调试工作流。所有 node 内 debug 操作�
 | **OLT Node (EXS1610)** | `10.254.20.137` (ma0) | `root` / **空密码** | SN `S220Z31018422`，device name `chicago` |
 | Remote PC (console) | `10.254.20.184` | `root` / `vecima` | serial: `/dev/Node27` |
 | EXC Chicago M OAM | `10.254.21.42` | CLI: `eacadmin/eacadmin` | NETCONF 控制器 |
-| vPONMgr | `10.254.21.43` | WebUI: `admin@vecima.com` / `Vecima@1234` | 改 log level、OMCI trace |
+| **vPONMgr (vPM)** | `10.254.21.43` (mgmt `ens3`); FQDN `chicago.vponmanager.qdlab`; Kafka/OLT 面 `31.27.90.100` (`ens8`) | SSH: `root` / `nokia@`；WebUI: `admin@vecima.com` / `Vecima@1234` | Docker compose PON Manager；Kafka + TimescaleDB；改 log level、OMCI trace |
 | APPS Chicago | `10.254.21.44` | `root` / `nokia@` | |
 
 **VLAN：**
@@ -348,29 +348,27 @@ journalctl -f -u dev_mgmt_daemon
 
 ### 8.4 调整 log level
 
-**vPONMgr：** Setting → Service Groups → OLT Logging Configuration
-（或 OLT Inventory → Configuration → Logging）
+**vPONMgr：** WebUI Setting → Service Groups → OLT Logging Configuration
+（或 OLT Inventory → Configuration → Logging）。SSH / Kafka / Postgres 见 **§13**。
 
 Chicago wiki 常用 debug 源：
 - `omci-me-layer`, `omci-transport`, `omci-svc`, `netconf`, `bal-api` → debug
 
-### 8.5 OMCI log 抓取
+### 8.5 OMCI log → Wireshark pcap
+
+**Use skill `xpon-omci-pcap`** (full workflow + `journal_to_omci_pcap.py` converter).
 
 ```bash
-# 1. vPONMgr 设 OMCI ME Layer / Service / Transport 为 Debug
-# 2. node 上：
-journalctl --no-pager > /tmp/omci.log
+# 1. vPONMgr: omci-transport = Debug (required for hex frames)
+# 2. Pull journal (prefer over /run/log/messages)
+journalctl --no-pager -n 50000 > /tmp/omci-journal.log
 
-# 过滤 OMCI 帧（全 ONU）
-grep "omci_stack_rx\.c.*{olt_id=.*pon_if=.*onu_id=.*cookie=.*}: " /tmp/omci.log \
-  | sed 's/^.*{.*}: //g' > /tmp/omci.pcap
-
-# 指定 ONU（例：pon_if=2, onu_id=55）
-grep "omci_stack_rx\.c.*{olt_id=.*pon_if=.*onu_id=.*cookie=.*}: " /tmp/omci.log \
-  | sed 's/^.*{olt_id=0 pon_if=2, onu_id=55.*}: //g' > /tmp/omci.pcap
+# 3. Convert to pcap
+python3 ~/.cursor/skills/xpon-omci-pcap/scripts/journal_to_omci_pcap.py \
+  /tmp/omci-journal.log -o /tmp/omci.pcap --pon-ni 30 --onu-id 0
 ```
 
-Wireshark 分析：导入 omci.pcap（No dummy header），插件见 [omci-wireshark-dissector](https://github.com/0liv1er/omci-wireshark-dissector)。
+Wireshark: install `omci.lua` plugin; open `.pcap`; filter `omci` or `eth.type == 0x88b5`.
 
 ### 8.6 PLOAM log 抓取
 
@@ -616,7 +614,7 @@ sshpass -p '' scp root@10.254.20.137:/run/log/messages /tmp/olt-messages.log
 
 ### 11.5 Agent 远程操作前提
 
-- `~/.local/bin/sshpass` 已安装并验证（§11.2）→ Agent 可自动 SSH/scp 到 Chicago OLT
+- `~/.local/bin/sshpass` 已安装并验证（§11.2）→ Agent 可自动 SSH/scp 到 Chicago OLT（空密码）和 vPM（`nokia@`，§13）
 - 未安装时：用户终端手动 SSH，或粘贴 log / scp 文件给 Agent 分析
 
 ---
@@ -630,6 +628,165 @@ cat /run/dev/rip/mac-base
 sensors
 dbc -C "get hwmonall" -A node-mgr
 ```
+
+---
+
+## 13. Chicago vPON Manager（vPM）debug
+
+北向控制器：hostname `chicago.vponmanager.qdlab`，RHEL 9.4，PON Manager 以 **Docker Compose** 跑在 `/root/workspace/pon-mgr-deploy/docker-compose`（project `ponmgr`，镜像 tag `390`）。**Kafka broker 在 vPM 上，不在 OLT 上。** OLT `metrics-mgr` 是 producer。
+
+### 13.1 登录
+
+```bash
+# SSH（Agent / 脚本）
+sshpass -p 'nokia@' ssh -o StrictHostKeyChecking=no root@10.254.21.43
+# 或
+ssh root@chicago.vponmanager.qdlab    # 密码 nokia@
+
+# WebUI
+# https://10.254.21.43:8443  或  http://10.254.21.43:8080
+# admin@vecima.com / Vecima@1234
+```
+
+| 面 | 地址 | 用途 |
+|----|------|------|
+| mgmt `ens3` | `10.254.21.43/23` | SSH、WebUI、实验室管理网 |
+| Kafka/OLT `ens8` | `31.27.90.100/24` | OLT 北向连 Kafka SSL（Chicago OLT `31.27.60.59` → `:10096`） |
+| docker0 / compose | `172.17.0.1` / `172.18.0.1` | 容器互访（`kafka:9092`、`postgresql:5432`） |
+
+### 13.2 栈一览
+
+```
+OLT metrics-mgr  --TLS produce-->  vPM Kafka (1 broker, KRaft)
+                                      |
+                                      v  consumer group ponltcs
+                                   ponmgrltcs  -->  PostgreSQL 15 + TimescaleDB
+```
+
+```bash
+cd /root/workspace/pon-mgr-deploy/docker-compose
+docker compose ps
+docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
+```
+
+| 容器 | 镜像 | 宿主机端口 | 作用 |
+|------|------|------------|------|
+| `ponmgr-kafka-1` | `apache/kafka:3.8.1` | 10092–10094, **10096** | **单 broker**（KRaft：`PROCESS_ROLES=broker,controller`，`NODE_ID=1`） |
+| `ponmgr-postgresql-1` | `timescale/timescaledb:2.27.2-pg15` | **5432** | **是 Postgres**（PG 15 + Timescale 扩展）；各微服务库 |
+| `ponmgr-redis-1` | redis-stack | 6379, 8001 | 缓存 |
+| `ponmgr-ponmgrltcs-1` | `ponmgrltcs:390` | 18025–18027 | Analytics：消费 `vecima-olt-telemetry`，写入 `ponmgrltcs` |
+| `ponmgr-ponmgrctrl-1` | `ponmgrctrl:390` | 4335, 18010–18012 | 控制面 / Call Home |
+| `ponmgr-ponmgrprov-1` | `ponmgrprov:390` | 18005–18007 | 开通；库表带 `_chicago` 后缀 |
+| `ponmgr-ponmgrui-1` | `ponmgrui:390` | 8080, 8443 | Web UI |
+| `ponmgr-grafana-1` / `loki` | grafana / loki 2.9 | 3000 / 3100 | 容器日志看板 |
+
+数据卷：Kafka `ponmgr_kafka_data`；Postgres `ponmgr_postgres_data`。
+
+### 13.3 Kafka（单 broker）
+
+**Chicago 实验室是 1 个 Kafka broker**（一个 container）。不是 OLT 本机进程。
+
+| 容器端口 | 宿主机 | 协议 | advertised | 给谁用 |
+|----------|--------|------|------------|--------|
+| 9092 | **10092** | PLAINTEXT `CLIENT` | `kafka:9092` | compose 内微服务 |
+| 9093 | 10093 | PLAINTEXT `EXTERNAL` | `localhost:10093` | 本机调试 |
+| 9094 | 10094 | `CONTROLLER` | （KRaft 内部） | **不要当 client 端口** |
+| 9096 | **10096** | **SSL `SECURE`** | `chicago.vponmanager.qdlab:10096` | **OLT telemetry / 告警** |
+
+OLT YANG（实测 running）：
+
+```xml
+<address>chicago.vponmanager.qdlab</address>
+<remote-port>10096</remote-port>
+<publish-timer>120</publish-timer>
+```
+
+TLS 开在 **10096**，不是 YANG 默认的 9094，也不是宿主机 10094（controller）。
+
+```bash
+# 在 vPM 上
+docker exec ponmgr-kafka-1 /opt/kafka/bin/kafka-topics.sh \
+  --bootstrap-server localhost:9092 --list
+
+docker exec ponmgr-kafka-1 /opt/kafka/bin/kafka-topics.sh \
+  --bootstrap-server localhost:9092 --describe --topic vecima-olt-telemetry
+
+docker exec ponmgr-kafka-1 /opt/kafka/bin/kafka-get-offsets.sh \
+  --bootstrap-server localhost:9092 --topic vecima-olt-telemetry --time -1
+
+docker exec ponmgr-kafka-1 /opt/kafka/bin/kafka-consumer-groups.sh \
+  --bootstrap-server localhost:9092 --group ponltcs --describe
+
+docker logs --tail 80 ponmgr-kafka-1
+```
+
+OLT 侧相关 topic：`vecima-olt-telemetry`（metrics-mgr）、`XGS-Alarms`（notif-mgr）。`ponltcs` 消费 telemetry，**lag 应为 0** 表示 Analytics 跟上。
+
+OLT 上核对连接：
+
+```bash
+sysrepocfg -X -d running -f xml -x /vecima-device:device/kafka-interface
+netstat -tn | grep 10096
+systemctl is-active metrics-mgr
+journalctl -u metrics-mgr -n 50 --no-pager | grep -iE 'broker|Kafka producer|reconnect'
+```
+
+### 13.4 存储：PostgreSQL + TimescaleDB（是 Postgres）
+
+容器 `ponmgr-postgresql-1`：`PostgreSQL 15.18` + 扩展 `timescaledb 2.27`。应用库按微服务拆分，**不是** Mongo/MySQL。
+
+| 库 | Owner / 服务 | 存什么 |
+|----|----------------|--------|
+| `ponmgrltcs` | Analytics (`ponmgrltcs`) | 遥测：`channel_termination_statsv3`、`lag_statsv2`、`dhcpv4_stats`、`onu_rssi`、`transceiver_*`、`l2_forwarding`、`lldp` 等 |
+| `ponmgrprov` | provisioning | OLT/ONU/subscriber；Chicago 表名带 `_chicago`（如 `olt`、`onu`、`alarmsv2_chicago`） |
+| `ponmgrauth` | auth | users / operators / tokens |
+| `ponmgrfms` | firmware | ONU/OLT firmware、campaign |
+| `ponmgrrbac` | RBAC | roles / policies |
+| `ponmgrsupinfo` | support-info | support 包元数据 |
+| `postgres` | superuser | 维护库 |
+
+容器内用 superuser，不必从 `.env` 掏业务密码：
+
+```bash
+docker exec -it ponmgr-postgresql-1 psql -U postgres
+# \l
+# \c ponmgrltcs
+# \dt
+# SELECT COUNT(*) FROM channel_termination_statsv3;
+# \c ponmgrprov
+# SELECT * FROM olt;
+```
+
+非交互：
+
+```bash
+docker exec ponmgr-postgresql-1 psql -U postgres -c '\l'
+docker exec ponmgr-postgresql-1 psql -U postgres -d ponmgrltcs -c '\dt'
+docker exec ponmgr-postgresql-1 pg_isready -U postgres
+```
+
+备份脚本：`/root/workspace/pon-mgr-deploy/docker-compose/db-backup.sh` / `db-restore.sh`。
+
+Redis 是会话/缓存，**不是** telemetry 主存储。Kafka 是管道；**落库在 Postgres（Timescale）**。
+
+### 13.5 微服务日志 / Grafana
+
+```bash
+docker logs --tail 100 ponmgr-ponmgrltcs-1
+docker logs --tail 100 ponmgr-ponmgrctrl-1
+docker logs --tail 100 ponmgr-postgresql-1
+```
+
+Grafana：`http://10.254.21.43:3000`（Loki 收各微服务 log）。WebUI 改 OLT log level 仍走 §8.4。
+
+### 13.6 Agent 远程 vPM
+
+```bash
+sshpass -p 'nokia@' ssh -o StrictHostKeyChecking=no root@10.254.21.43 \
+  'docker compose -f /root/workspace/pon-mgr-deploy/docker-compose/docker-compose.yml ps'
+```
+
+BusyBox 不在 vPM 上（RHEL）；OLT 上 `head -n N`，不要 `head -40`。
 
 ---
 
@@ -667,4 +824,11 @@ sshpass -p '' scp <path>/bcmolt_netconf_server root@10.254.20.137:/usr/bin/
 sshpass -p '' ssh root@10.254.20.137 "chmod 755 /usr/bin/bcmolt_netconf_server && systemctl restart netconf-polt"
 
 # 拔插光纤 log 抓取（见 §8.8 / §10.5）
+
+# --- vPM (10.254.21.43, 密码 nokia@) ---
+sshpass -p 'nokia@' ssh root@10.254.21.43
+docker compose -f /root/workspace/pon-mgr-deploy/docker-compose/docker-compose.yml ps
+docker exec ponmgr-kafka-1 /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
+docker exec ponmgr-postgresql-1 psql -U postgres -c '\l'
+# OLT kafka-interface → chicago.vponmanager.qdlab:10096 (SSL)
 ```
