@@ -6,10 +6,9 @@ Markdown + Mermaid pages are published via this skill’s `confluence/publish.py
 
 ```bash
 git clone https://github.com/imxv/Pretty-mermaid-skills.git ~/.cursor/skills/pretty-mermaid
-cd ~/.cursor/skills/pretty-mermaid && npm install
 ```
 
-Or copy an existing `~/.cursor/skills/pretty-mermaid/` tree from a teammate.
+No `npm install` — SVG comes from mermaid.ink (official mermaid.js). Python 3.10+ is enough for `publish.py`. Node 18+ is optional for `scripts/render.mjs`.
 
 ## Credentials
 
@@ -27,14 +26,15 @@ python3 ~/.cursor/skills/pretty-mermaid/confluence/publish.py \
   --config path/to/my-page.publish.json
 ```
 
-`--dry-run` renders SVG + storage HTML locally without uploading.
+`--dry-run` renders SVG + storage HTML locally without uploading. Rendering needs HTTPS to mermaid.ink.
 
 ## Skill layout
 
 | Path | Role |
 |------|------|
-| `scripts/render.mjs` | beautiful-mermaid SVG renderer |
-| `confluence/mermaid.py` | Confluence SVG enhance + layout review |
+| `scripts/official-mermaid.mjs` | mermaid.ink / Kroki fetch (Node CLI) |
+| `scripts/render.mjs` | Official mermaid.js SVG CLI |
+| `confluence/mermaid.py` | Official mermaid.js SVG + image/expand macros |
 | `confluence/page.py` | full-width page property |
 | `confluence/creds.py` | auth from env / MCP |
 | `confluence/publish.py` | MD → storage HTML → Confluence API |
@@ -75,7 +75,7 @@ Use `build_row4()` and the grid builders in `ascii_art.py` for new layouts; do n
 1. **Create empty page in Confluence UI** (not API placeholder + later PUT — draft stays on `placeholder` and Edit breaks).
 2. Add `my-page.md`, `my-page.intro.html`, `my-page.publish.json`.
 3. Set `page_id`, `attachment_prefix`, `version_comment` in JSON.
-4. Run `publish.py --config ... --dry-run`, fix layout review errors.
+4. Run `publish.py --config ... --dry-run`, check SVGs against mermaid.live.
 5. Publish without `--dry-run`.
 6. **Open Edit once** after publish; if editor fails, create a **new** UI page — do not loop restore/sync-draft.
 
@@ -125,12 +125,14 @@ Markdown maintainer blocks not for Confluence: `<!-- publish:skip -->` before a 
 
 Use `preserve_before_heading` when the wiki prefix (TOC, intro prose, tables) was edited in the UI and should not be overwritten on re-publish.
 
-## Layout review CLI
+## Render CLI
 
 ```bash
-python3 ~/.cursor/skills/pretty-mermaid/confluence/mermaid.py review diagram.mmd diagram.svg
+python3 ~/.cursor/skills/pretty-mermaid/confluence/mermaid.py render diagram.mmd diagram.svg --theme default
 ```
+
+`review` is a no-op leftover (official mermaid.js SVG uses `foreignObject`; the old beautiful-mermaid layout checker does not apply).
 
 ## Sharing with others
 
-Give them the **skill directory** (or upstream clone + `npm install`). Repo only needs `.md` + `.publish.json` + `.intro.html` — no Python publish scripts in the project.
+Give them the **skill directory**. Repo only needs `.md` + `.publish.json` + `.intro.html` — no Python publish scripts in the project. No `npm install`.

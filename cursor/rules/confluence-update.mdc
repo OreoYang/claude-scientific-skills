@@ -1,5 +1,5 @@
 ---
-description: Confluence wiki update workflow — concise technical docs, ASCII diagrams, preserve TOC; use when editing Atlassian/Confluence pages.
+description: Confluence wiki update workflow — concise technical docs, ASCII diagrams, preserve TOC; debug/runbook how-tos (step purpose + Expand scripts); use when editing Atlassian/Confluence pages or writing 执行手册.
 alwaysApply: false
 ---
 
@@ -19,9 +19,39 @@ alwaysApply: false
 ## Content style
 
 - **Technical & concise** — logic and call flow over prose; tables for comparisons/counters.
-- **No line-level code dumps** unless user asks — file/function names OK, skip `file.c:862-874` unless debugging.
+- **No line-level code dumps** on architecture pages unless user asks — file/function names OK, skip `file.c:862-874`.
 - **English or 中文** — match the page’s existing language.
 - One **Conclusion** line per major section, then diagrams/flows, then short Verify/Mitigation if relevant.
+
+## Debug / runbook / how-to (执行手册)
+
+Applies when writing lab debug, E2E verify, DbgCli, Kafka decode, or operator how-tos — **not** architecture pages.
+
+**Reference:** [CPMP Kafka E2E Debug (XGS-11448)](https://vecima.atlassian.net/wiki/spaces/~Oreo.Yang/pages/265487660)
+
+| Do | Don't |
+|----|-------|
+| Each step: heading + **1–2 sentences** of **what this step does** (+ pass criteria) | Background essays, design recap, abandoned alternatives, chat history |
+| Expect table only when checking several fields | Repeat the same facts in prose and table |
+| Put the **actual runnable script** in a collapsed Expand | Comment-only stubs; open 80-line script walls |
+| Expand title names the script (`Script — HasField counts`) | Expand titled “code” / “click here” |
+
+**Step shape**
+
+```text
+h2/h3  N. Title
+  one paragraph: purpose + pass
+  optional expect table
+  <details><summary>Script — …</summary>
+    <pre><code class="language-shell">…the script that was actually run…</code></pre>
+  </details>
+```
+
+**Collapsed code (mandatory for any command/script longer than ~4 lines)**
+
+- MCP HTML: `<details><summary>Title</summary><pre><code class="language-shell">…</code></pre></details>` (Confluence Expand).
+- Storage XML: `ac:name="expand"` wrapping `ac:name="code"`.
+- One Expand per script. Do not leave a second copy of the same script in the open body.
 
 ## Diagrams (required when explaining architecture or RX/TX paths)
 
@@ -51,7 +81,7 @@ Shows **“Error loading the extension!”** on this instance (pre-existing). Do
 
 ## Preserve on edit
 
-- `{toc}` macro at page top
+- `{toc}` macro — must stay the **first element of the body**, above the intro paragraph; keep the user's `maxLevel` / `minLevel`
 - Existing `code` / diagram style consistency
 - Section numbering (`§4.6`, `5) …`) unless restructuring is requested
 
@@ -66,3 +96,4 @@ Shows **“Error loading the extension!”** on this instance (pre-existing). Do
 - Publish without confirmation on exploratory drafts
 - Use one-off Python/REST scripts when MCP partial update suffices
 - Commit Confluence content to git unless user asks
+- Put Archify/export boilerplate in the page body (e.g. “Figures are Archify SVG locked to light + classic”). Theme lock stays in the SVG exporter; wiki intro is scope only.

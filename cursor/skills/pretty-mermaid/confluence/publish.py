@@ -22,7 +22,6 @@ from creds import load_confluence_auth
 from ascii_art import AsciiArtError, is_box_diagram, validate_ascii_art_strict
 from mermaid import (
     mermaid_diagram_block,
-    normalize_mermaid_br,
     render_mermaid_svg,
     slugify,
 )
@@ -104,7 +103,6 @@ class DiagramRegistry:
 
     def next(self, section_title: str, mmd_source: str) -> str:
         self._counter += 1
-        mmd_source = normalize_mermaid_br(mmd_source)
         slug = slugify(section_title)
         attachment_name = f"{self._prefix}-{self._counter:02d}-{slug}.svg"
         svg_path = self._diagram_dir / attachment_name

@@ -2,6 +2,7 @@
 
 Use this layout when **creating** or **rewriting** architecture / technical-guide wiki pages.
 Default to **concise and scannable** — link or child-page the deep dive; do not paste everything on one page.
+Write in **simple English**: short sentences, one idea each, common words, active voice. Page owners are often not native speakers and must defend the text in review. Code identifiers, YANG keywords and numbers stay exact — simplify only the prose around them.
 
 **Reference example (Vecima):** [Technical Guide: XGS Node QoS — BAL, Upstream & Downstream (R26.1.0)](https://vecima.atlassian.net/wiki/spaces/~fjyang/pages/234751290) — clear Parts, one diagram per major idea, tables for facts, short code snippets, entry-point tables at section ends.
 
@@ -72,7 +73,7 @@ Part 4 — Future / requirements (optional)
 | Section | `h3` — `N.M Title` numbering (`1.1`, `2.3`) |
 | Sub-detail | `h4` only when Part 3+ is long |
 
-Optional TOC macro after the opening paragraph (`minLevel=2`, `maxLevel=3`). Do not rely on TOC alone for structure — Parts and `N.M` numbers must read clearly in View.
+TOC macro (`minLevel=2`, `maxLevel=3`) goes **first in the body**, above the opening paragraph and any `h1`. Do not rely on TOC alone for structure — Parts and `N.M` numbers must read clearly in View.
 
 ---
 
@@ -107,7 +108,8 @@ Keep tables **≤8 columns**; use `data-layout="wide"` on full-width pages.
 
 ## Code on the page
 
-- **Short** API/config snippets in `code` macros (`wide` layout for struct dumps).
+- **Architecture / technical guide:** short API/config snippets in `code` macros (`wide` layout for struct dumps). ≤~15 lines.
+- **Debug / runbook / how-to:** each step states **what it does** (1–2 sentences + pass); the **actual script** goes in a collapsed Expand wrapping a `code` block — never an open script wall and never a comment-only stub. MCP HTML: `<details><summary>Script — …</summary><pre><code>…</code></pre></details>`. Example: [CPMP Kafka E2E Debug](https://vecima.atlassian.net/wiki/spaces/~Oreo.Yang/pages/265487660).
 - **No** repo maintainer commands (`bitbake`, `publish.py`, `gen-*-svg`) in wiki body — repo only (`<!-- publish:skip -->` in `.md`).
 - **No** paste-guide markdown (`*.paste.md`) content on the wiki — those are UI helper drafts.
 
@@ -118,14 +120,14 @@ Keep tables **≤8 columns**; use `data-layout="wide"` on full-width pages.
 Minimal header before scripted sections:
 
 ```html
-<h1>Page title</h1>
-<p><strong>JIRA:</strong> <a href="…">KEY</a><br/>
-<strong>Related:</strong> <a href="…">parent overview</a><br/>
-<strong>Repo source:</strong> <code>path/to/confluence-*.md</code></p>
 <ac:structured-macro ac:name="toc" ac:schema-version="1">
   <ac:parameter ac:name="maxLevel">3</ac:parameter>
   <ac:parameter ac:name="minLevel">2</ac:parameter>
 </ac:structured-macro>
+<h1>Page title</h1>
+<p><strong>JIRA:</strong> <a href="…">KEY</a><br/>
+<strong>Related:</strong> <a href="…">parent overview</a><br/>
+<strong>Repo source:</strong> <code>path/to/confluence-*.md</code></p>
 <hr/>
 ```
 
@@ -144,6 +146,7 @@ Body sections follow from `.md` or UI-edited prefix. Do not duplicate the full p
 | Duplicate “overview” + “simplified” + “legacy” figures | One current diagram; history in prose/table |
 | Actor-level swimlane per file | One dispatch figure + entry-point table |
 | Paste tables copied from design drafts | Trim to columns readers need (Path \| Caller \| Notes) |
+| “Figures are Archify SVG locked to light + classic” in the intro | Theme lock is the exporter; wiki intro is scope only |
 
 When **updating** an over-long page: collapse duplicate figures, move deep sections to child pages, keep Part structure and entry-point tables.
 
@@ -153,7 +156,7 @@ When **updating** an over-long page: collapse duplicate figures, move deep secti
 
 1. Confluence UI: create empty page → full-width.
 2. Repo: `confluence-*.md` following skeleton above; `intro.html` + `*.publish.json`.
-3. `publish.py --dry-run` → fix layout review errors.
+3. `publish.py --dry-run` → check SVGs match mermaid.live.
 4. First publish: diagram sections via `publish.py`; intro/prose via UI if mixed page (`preserve_before_heading`).
 5. Open **Edit** once; verify structure matches template, not raw dump.
 

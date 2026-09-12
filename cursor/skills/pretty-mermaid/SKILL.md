@@ -1,18 +1,17 @@
 ---
 name: pretty-mermaid
 description: >-
-  Renders Mermaid diagrams as SVG or ASCII via beautiful-mermaid (no Chrome/Puppeteer).
-  Supports 15+ themes and batch rendering. Use when rendering .mmd files, creating
-  flowcharts/sequence diagrams, batch-processing diagrams for Confluence/docs, or when
-  mermaid-cli fails due to headless Chrome dependencies.
-version: 1.1.0
+  Renders Mermaid diagrams as SVG via official mermaid.js (mermaid.ink / mermaid.live).
+  No beautiful-mermaid, no Chrome, no Puppeteer. Use when rendering .mmd files,
+  publishing Confluence pages with ```mermaid blocks, or matching mermaid.live output.
+version: 2.0.0
 ---
 
 # Pretty Mermaid
 
 **Skill root:** `~/.cursor/skills/pretty-mermaid/` (personal Cursor skill; real files, not a symlink).
 
-Render professionally-styled Mermaid diagrams with one command. Output SVG for web/Confluence or ASCII for terminals. Uses **beautiful-mermaid** in Node — no `mmdc`, no Puppeteer.
+Render **official mermaid.js** SVG — the same engine as [mermaid.live](https://mermaid.live). Uses **mermaid.ink** over HTTPS (Kroki as fallback). No `mmdc`, no Puppeteer, no beautiful-mermaid.
 
 ## Confluence publish
 
@@ -23,26 +22,27 @@ python3 ~/.cursor/skills/pretty-mermaid/confluence/publish.py \
   --config path/to/page.publish.json
 ```
 
-Do **not** use raw `render.mjs` for Confluence — use `confluence/mermaid.py` (dark edges, sequence tints, layout review).
+`publish.py` calls `confluence/mermaid.py` → mermaid.ink. CLI `scripts/render.mjs` uses the same official renderer.
 
-**New pages:** create empty page in Confluence UI first; then `publish.py`. Content layout: `references/PAGE_TEMPLATE.md`. Publish mechanics: `references/CONFLUENCE.md` (`preserve_before_heading`, `skip_sections`, anti-patterns).
+**New pages:** create empty page in Confluence UI first; then `publish.py`. Content layout: `references/PAGE_TEMPLATE.md`. Publish mechanics: `references/CONFLUENCE.md`.
 
 ## Quick Start
 
 ### Render a Single Diagram
 
-**From a file:**
+```bash
+python3 ~/.cursor/skills/pretty-mermaid/confluence/mermaid.py render \
+  diagram.mmd diagram.svg --theme default
+```
+
+Or Node:
+
 ```bash
 node ~/.cursor/skills/pretty-mermaid/scripts/render.mjs \
   --input diagram.mmd \
   --output diagram.svg \
-  --format svg \
-  --theme tokyo-night
+  --theme default
 ```
-
-**From user-provided Mermaid code:**
-1. Save the code to a `.mmd` file
-2. Run the render script with desired theme
 
 ### Batch Render Multiple Diagrams
 
@@ -50,18 +50,8 @@ node ~/.cursor/skills/pretty-mermaid/scripts/render.mjs \
 node ~/.cursor/skills/pretty-mermaid/scripts/batch.mjs \
   --input-dir ./diagrams \
   --output-dir ./output \
-  --format svg \
-  --theme dracula \
+  --theme default \
   --workers 4
-```
-
-### ASCII Output (Terminal-Friendly)
-
-```bash
-node ~/.cursor/skills/pretty-mermaid/scripts/render.mjs \
-  --input diagram.mmd \
-  --format ascii \
-  --use-ascii
 ```
 
 ---
@@ -69,20 +59,21 @@ node ~/.cursor/skills/pretty-mermaid/scripts/render.mjs \
 ## Workflow Decision Tree
 
 **Step 1: What does the user want?**
-- **Render existing Mermaid code** → Go to [Rendering](#rendering-diagrams)
-- **Create new diagram** → Go to [Creating](#creating-diagrams)
-- **Apply/change theme** → Go to [Theming](#theming)
-- **Batch process** → Go to [Batch Rendering](#batch-rendering)
+- **Render existing Mermaid code** → [Rendering](#rendering-diagrams)
+- **Create new diagram** → [Creating](#creating-diagrams)
+- **Apply/change theme** → [Theming](#theming)
+- **Batch process** → [Batch Rendering](#batch-rendering)
 
-**Step 2: Choose output format**
-- **SVG** (web, docs, presentations) → `--format svg`
-- **ASCII** (terminal, logs, plain text) → `--format ascii`
+**Step 2: Output format**
+- **SVG** only (`--format svg`). ASCII Mermaid (beautiful-mermaid) has been removed; preview on mermaid.live or render SVG.
 
-**Step 3: Select theme**
-- **Dark mode docs** → `tokyo-night` (recommended)
-- **Light mode docs** → `github-light`
-- **Vibrant colors** → `dracula`
-- **See all themes** → Run `node ~/.cursor/skills/pretty-mermaid/scripts/themes.mjs`
+**Step 3: Select theme** (official mermaid.js)
+- **Light docs / Confluence** → `default` (same as mermaid.live)
+- **Dark docs** → `dark`
+- **Also:** `forest`, `neutral`, `base`
+- **See all** → `node ~/.cursor/skills/pretty-mermaid/scripts/themes.mjs`
+
+Legacy names (`github-light`, `tokyo-night`, `dracula`, …) map to `default` or `dark`.
 
 ---
 
@@ -90,71 +81,35 @@ node ~/.cursor/skills/pretty-mermaid/scripts/render.mjs \
 
 ### From File
 
-When user provides a `.mmd` file or Mermaid code block:
+1. Save Mermaid source to a `.mmd` file (or use a ` ```mermaid ` block in Markdown).
+2. Render:
 
-1. **Save to file** (if code block):
-   ```bash
-   cat > diagram.mmd << 'EOF'
-   flowchart LR
-       A[Start] --> B[End]
-   EOF
-   ```
+```bash
+node ~/.cursor/skills/pretty-mermaid/scripts/render.mjs \
+  --input diagram.mmd \
+  --output diagram.svg \
+  --theme default
+```
 
-2. **Render with theme**:
-   ```bash
-   node ~/.cursor/skills/pretty-mermaid/scripts/render.mjs \
-     --input diagram.mmd \
-     --output diagram.svg \
-     --theme tokyo-night
-   ```
-
-3. **Verify output**:
-   - SVG: Open in browser or embed in docs
-   - ASCII: Display in terminal
+3. Verify: open the SVG, or paste the `.mmd` into https://mermaid.live/ — they should match.
 
 ### Output Formats
 
-**SVG (Scalable Vector Graphics)**
-- Best for: Web pages, documentation, presentations
-- Features: Full color support, transparency, scalable
-- Usage: `--format svg --output diagram.svg`
+**SVG** — web, Confluence, docs. Official mermaid.js look (`classDef`, `<br/>` in labels, rounded nodes).
 
-**ASCII (Terminal Art)**
-- Best for: Terminal output, plain text logs, README files
-- Features: Pure text, works anywhere, no dependencies
-- Usage: `--format ascii` (prints to stdout)
-- Options:
-  - `--use-ascii` - Use pure ASCII (no Unicode)
-  - `--padding-x 5` - Horizontal spacing
-  - `--padding-y 5` - Vertical spacing
+**ASCII** — removed. Use mermaid.live or SVG. (Fixed-width **box-drawing** diagrams for Confluence still live in `confluence/ascii_art.py` — that is not Mermaid.)
 
-### Advanced Options
+### Options
 
-**Custom Colors** (overrides theme):
 ```bash
 node ~/.cursor/skills/pretty-mermaid/scripts/render.mjs \
   --input diagram.mmd \
-  --bg "#1a1b26" \
-  --fg "#a9b1d6" \
-  --accent "#7aa2f7" \
-  --output custom.svg
-```
-
-**Transparent Background**:
-```bash
-node ~/.cursor/skills/pretty-mermaid/scripts/render.mjs \
-  --input diagram.mmd \
+  --theme default \
   --transparent \
-  --output transparent.svg
+  --output diagram.svg
 ```
 
-**Custom Font**:
-```bash
-node ~/.cursor/skills/pretty-mermaid/scripts/render.mjs \
-  --input diagram.mmd \
-  --font "JetBrains Mono" \
-  --output custom-font.svg
-```
+`%%{init: ...}%%` in the source is left as-is (not overwritten).
 
 ---
 
@@ -162,364 +117,84 @@ node ~/.cursor/skills/pretty-mermaid/scripts/render.mjs \
 
 ### Using Templates
 
-**Step 1: List available templates**
 ```bash
-ls assets/example_diagrams/
+ls ~/.cursor/skills/pretty-mermaid/assets/example_diagrams/
 # flowchart.mmd  sequence.mmd  state.mmd  class.mmd  er.mmd
 ```
 
-**Step 2: Copy and modify**
-```bash
-cp assets/example_diagrams/flowchart.mmd my-workflow.mmd
-# Edit my-workflow.mmd with user requirements
-```
-
-**Step 3: Render**
-```bash
-node ~/.cursor/skills/pretty-mermaid/scripts/render.mjs \
-  --input my-workflow.mmd \
-  --output my-workflow.svg \
-  --theme github-dark
-```
-
-### Diagram Type Reference
-
-For detailed syntax and best practices, see [DIAGRAM_TYPES.md](references/DIAGRAM_TYPES.md).
-
-**Quick reference:**
-
-**Flowchart** - Processes, workflows, decision trees
-```mermaid
-flowchart LR
-    A[Start] --> B{Decision}
-    B -->|Yes| C[Action]
-    B -->|No| D[End]
-```
-
-**Sequence** - API calls, interactions, message flows
-```mermaid
-sequenceDiagram
-    User->>Server: Request
-    Server-->>User: Response
-```
-
-**State** - Application states, lifecycle, FSM
-```mermaid
-stateDiagram-v2
-    [*] --> Idle
-    Idle --> Loading
-    Loading --> [*]
-```
-
-**Class** - Object models, architecture, relationships
-```mermaid
-classDiagram
-    User --> Post: creates
-    Post --> Comment: has
-```
-
-**ER** - Database schema, data models
-```mermaid
-erDiagram
-    USER ||--o{ ORDER : places
-    ORDER ||--|{ ORDER_ITEM : contains
-```
+Copy, edit, render with `--theme default`. Syntax: [DIAGRAM_TYPES.md](references/DIAGRAM_TYPES.md). Preview on mermaid.live before publish.
 
 ### From User Requirements
 
-**Step 1: Identify diagram type**
-- **Process/workflow** → Flowchart
-- **API/interaction** → Sequence
-- **States/lifecycle** → State
-- **Object model** → Class
-- **Database** → ER
-
-**Step 2: Create diagram file**
-```bash
-cat > user-diagram.mmd << 'EOF'
-# [Insert generated Mermaid code]
-EOF
-```
-
-**Step 3: Render and iterate**
-```bash
-node ~/.cursor/skills/pretty-mermaid/scripts/render.mjs \
-  --input user-diagram.mmd \
-  --output preview.svg \
-  --theme tokyo-night
-
-# Review with user, edit diagram.mmd if needed, re-render
-```
+Process/workflow → Flowchart · API/interaction → Sequence · States → State · Object model → Class · Database → ER.
 
 ---
 
 ## Theming
 
-### List Available Themes
-
 ```bash
 node ~/.cursor/skills/pretty-mermaid/scripts/themes.mjs
 ```
 
-**Output:**
-```
-Available Beautiful-Mermaid Themes:
+Official themes: `default`, `dark`, `forest`, `neutral`, `base`. Details: [THEMES.md](references/THEMES.md).
 
- 1. zinc-light
- 2. zinc-dark
- 3. tokyo-night
- 4. tokyo-night-storm
- 5. tokyo-night-light
- 6. catppuccin-mocha
- 7. catppuccin-latte
- 8. nord
- 9. nord-light
-10. dracula
-11. github-dark
-12. github-light
-13. solarized-dark
-14. solarized-light
-15. one-dark
-
-Total: 15 themes
-```
-
-### Theme Selection Guide
-
-**For dark mode documentation:**
-- `tokyo-night` ⭐ - Modern, developer-friendly
-- `github-dark` - Familiar GitHub style
-- `dracula` - Vibrant, high contrast
-- `nord` - Cool, minimalist
-
-**For light mode documentation:**
-- `github-light` - Clean, professional
-- `zinc-light` - High contrast, printable
-- `catppuccin-latte` - Warm, friendly
-
-**Detailed theme information:** See [THEMES.md](references/THEMES.md)
-
-### Apply Theme to Diagram
-
-```bash
-node ~/.cursor/skills/pretty-mermaid/scripts/render.mjs \
-  --input diagram.mmd \
-  --output themed.svg \
-  --theme tokyo-night
-```
-
-### Compare Themes
-
-Render the same diagram with multiple themes:
-```bash
-for theme in tokyo-night dracula github-dark; do
-  node ~/.cursor/skills/pretty-mermaid/scripts/render.mjs \
-    --input diagram.mmd \
-    --output "diagram-${theme}.svg" \
-    --theme "$theme"
-done
-```
+Confluence technical pages should use **`default`** so figures match mermaid.live.
 
 ---
 
 ## Batch Rendering
 
-### Batch Render Directory
-
-**Step 1: Organize diagrams**
-```bash
-diagrams/
-├── architecture.mmd
-├── workflow.mmd
-└── database.mmd
-```
-
-**Step 2: Batch render**
 ```bash
 node ~/.cursor/skills/pretty-mermaid/scripts/batch.mjs \
   --input-dir ./diagrams \
   --output-dir ./rendered \
-  --format svg \
-  --theme tokyo-night \
+  --theme default \
   --workers 4
 ```
 
-**Output:**
-```
-Found 3 diagram(s) to render...
-✓ architecture.mmd
-✓ workflow.mmd
-✓ database.mmd
-
-3/3 diagrams rendered successfully
-```
-
-### Batch with Multiple Formats
-
-Render both SVG and ASCII:
-```bash
-# SVG for docs
-node ~/.cursor/skills/pretty-mermaid/scripts/batch.mjs \
-  --input-dir ./diagrams \
-  --output-dir ./svg \
-  --format svg \
-  --theme github-dark
-
-# ASCII for README
-node ~/.cursor/skills/pretty-mermaid/scripts/batch.mjs \
-  --input-dir ./diagrams \
-  --output-dir ./ascii \
-  --format ascii \
-  --use-ascii
-```
-
-### Performance Options
-
-- `--workers N` - Parallel rendering (default: 4)
-- Recommended: `--workers 8` for 10+ diagrams
-
----
-
-## Common Use Cases
-
-### 1. Architecture Diagram for Documentation
-
-```bash
-# User provides architecture description
-# → Create flowchart.mmd
-# → Render with professional theme
-
-node ~/.cursor/skills/pretty-mermaid/scripts/render.mjs \
-  --input architecture.mmd \
-  --output docs/architecture.svg \
-  --theme github-dark \
-  --transparent
-```
-
-### 2. API Sequence Diagram
-
-```bash
-# User describes API flow
-# → Create sequence.mmd
-# → Render with clear theme
-
-node ~/.cursor/skills/pretty-mermaid/scripts/render.mjs \
-  --input api-flow.mmd \
-  --output api-sequence.svg \
-  --theme tokyo-night
-```
-
-### 3. Database Schema Visualization
-
-```bash
-# User provides table definitions
-# → Create er.mmd
-# → Render for database docs
-
-node ~/.cursor/skills/pretty-mermaid/scripts/render.mjs \
-  --input schema.mmd \
-  --output database-schema.svg \
-  --theme dracula
-```
-
-### 4. Terminal-Friendly Workflow
-
-```bash
-# For README or terminal display
-node ~/.cursor/skills/pretty-mermaid/scripts/render.mjs \
-  --input workflow.mmd \
-  --format ascii \
-  --use-ascii > workflow.txt
-```
-
-### 5. Presentation Slides
-
-```bash
-# High-contrast for projectors
-node ~/.cursor/skills/pretty-mermaid/scripts/render.mjs \
-  --input slides-diagram.mmd \
-  --output presentation.svg \
-  --theme zinc-light
-```
+Needs network (mermaid.ink). `--workers` is parallel HTTP fetches.
 
 ---
 
 ## Troubleshooting
 
-### beautiful-mermaid Not Installed
-```
-Error: Cannot find module 'beautiful-mermaid'
-```
-**Note:** Dependencies install on first run. If it fails:
-```bash
-cd ~/.cursor/skills/pretty-mermaid && npm install
-```
+### Network / mermaid.ink error
+
+Renderer fetches `https://mermaid.ink/svg/<base64url>`. Override with `MERMAID_INK_URL`. Kroki (`https://kroki.io/mermaid/svg`) is the fallback.
+
+Paste the `.mmd` into https://mermaid.live/ to confirm syntax.
 
 ### Invalid Mermaid Syntax
-```
-Error: Parse error on line 3
-```
-**Solution:**
-1. Validate syntax against [DIAGRAM_TYPES.md](references/DIAGRAM_TYPES.md)
-2. Test on https://mermaid.live/
-3. Check for common errors:
-   - Missing spaces in `A --> B`
-   - Incorrect node shape syntax
-   - Unclosed brackets
 
-### File Not Found
-```
-Error: Input file not found: diagram.mmd
-```
-**Solution:** Verify file path is correct, use absolute path if needed
+Validate on mermaid.live. Common issues: missing spaces in `A --> B`, unclosed brackets, bad `classDef`.
+
+### Empty labels in Confluence
+
+Official mermaid.js SVG uses `<foreignObject>` for some labels. If Confluence strips them, fall back to mermaid.ink PNG (`/img/` instead of `/svg/`) — only if SVG text is blank on the wiki.
 
 ---
 
 ## Resources
 
 ### scripts/
-Executable Node.js scripts for rendering operations:
-- `render.mjs` - Main rendering script
-- `batch.mjs` - Batch processing script
-- `themes.mjs` - Theme listing utility
+- `official-mermaid.mjs` — mermaid.ink / Kroki fetch (shared)
+- `render.mjs` — single-file CLI
+- `batch.mjs` — directory of `.mmd`
+- `themes.mjs` — list official themes + aliases
+
+### confluence/
+- `mermaid.py` — official SVG render + Confluence image/expand macros
+- `publish.py` — Markdown → storage HTML → wiki
+- `page.py` — full-width
+- `ascii_art.py` — box-drawing (not Mermaid)
 
 ### references/
-Documentation to inform diagram creation:
-- `PAGE_TEMPLATE.md` — **Confluence page structure** (Parts, tables, figure budget; QoS guide as reference)
-- `CONFLUENCE.md` — publish workflow, `*.publish.json`, safe API patterns
-- `THEMES.md` - Detailed theme reference with examples
-- `DIAGRAM_TYPES.md` - Comprehensive syntax guide for all diagram types
-- `api_reference.md` - beautiful-mermaid API documentation
-
-### assets/
-Template files for quick diagram creation:
-- `example_diagrams/flowchart.mmd` - Flowchart template
-- `example_diagrams/sequence.mmd` - Sequence diagram template
-- `example_diagrams/state.mmd` - State diagram template
-- `example_diagrams/class.mmd` - Class diagram template
-- `example_diagrams/er.mmd` - ER diagram template
+- `PAGE_TEMPLATE.md`, `CONFLUENCE.md`, `THEMES.md`, `DIAGRAM_TYPES.md`, `api_reference.md`
 
 ---
 
-## Tips & Best Practices
+## Tips
 
-### Performance
-- Batch render for 3+ diagrams (parallel processing)
-- Keep diagrams under 50 nodes for fast rendering
-- Use ASCII for quick previews
-
-### Quality
-- Use `tokyo-night` or `github-dark` for technical docs
-- Add transparency for dark/light mode compatibility: `--transparent`
-- Test theme in target environment before batch rendering
-
-### Workflow
-1. Start with templates from `assets/example_diagrams/`
-2. Iterate with user feedback
-3. Apply theme last
-4. Render both SVG (docs) and ASCII (README) if needed
-
-### Accessibility
-- Use high-contrast themes for presentations
-- Add text labels to all connections
-- Avoid color-only information encoding
+- Author as you would on mermaid.live (`<br/>`, `classDef`, subgraphs).
+- Keep diagrams under ~50 nodes; split the rest to a child page.
+- Confluence: always SVG attachment + expand with the same source as `.md`.

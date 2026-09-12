@@ -1,0 +1,10 @@
+---
+description: Archify diagrams default to English
+alwaysApply: true
+---
+
+# Archify language
+
+When using the Archify skill, author every diagram in **English** and set `meta.locale` to `"en"`, even if the user wrote in Chinese.
+
+Use another language only when the user explicitly asks for it.

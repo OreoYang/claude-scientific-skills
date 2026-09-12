@@ -2,111 +2,64 @@
 
 # Pretty-Mermaid Skills
 
-![fLEWT5x.png](https://iili.io/fLEWT5x.png)
+Render Mermaid diagrams as **official mermaid.js** SVG (same as [mermaid.live](https://mermaid.live))
 
-Render Mermaid diagrams as beautiful SVGs or ASCII art
-
-Ultra-fast, fully themeable, zero DOM dependencies. Built for the AI era.
+No Chrome, no Puppeteer, no beautiful-mermaid.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Node.js Version](https://img.shields.io/badge/node-%3E%3D14-brightgreen)](https://nodejs.org/)
-[![GitHub stars](https://img.shields.io/github/stars/imxv/Pretty-mermaid-skills?style=social)](https://github.com/imxv/Pretty-mermaid-skills)
 
 **English** ｜ [中文](README_CN.md)
 
 </div>
 
 ## Introduction
-A Mermaid diagram rendering skill for AI, supporting both SVG and ASCII output formats to make your documentation more vivid.
 
-## ✨ Features
+A Mermaid rendering skill for AI. SVG is produced by **official mermaid.js** via [mermaid.ink](https://mermaid.ink) (Kroki fallback). Confluence publish attaches that SVG plus an expand with the source.
 
-- 📊 **Multi-format Support**: SVG and ASCII rendering export
-- 🎨 **Rich Themes**: 15 built-in themes for different scenarios
-- 📈 **Full Diagram Support**: Flowchart, Sequence, State, Class, ER and more
-- ⚡ **High Performance**: Batch parallel rendering
-- 📚 **Ready to Use**: Complete templates and detailed documentation
+## Features
 
-### Supported Themes
-| Light Themes | Dark Themes | Other |
-| :--- | :--- | :--- |
-| zinc-light | zinc-dark | nord |
-| tokyo-night-light | tokyo-night | nord-light |
-| cappuccin-latte | tokyo-night-storm | dracula |
-| github-light | cappuccin-mocha | one-dark |
-| solarized-light | github-dark | |
-| | solarized-dark | |
+- **Official look** — matches mermaid.live (`classDef`, `<br/>` labels, rounded nodes)
+- **Themes** — `default`, `dark`, `forest`, `neutral`, `base`
+- **Diagram types** — Flowchart, Sequence, State, Class, ER, and other mermaid.js types
+- **Batch** — parallel HTTP renders
+- **Confluence** — `confluence/publish.py` (image + expand)
 
-## 🤖 AI Assistant Integration
+## Quick Start
 
-Seamlessly integrates with the following AI coding environments:
-
-- **Claude Code**
-- **Cursor**
-- **Gemini CLI**
-- **Antigravity**
-- **OpenCode**
-- **Codex**
-- **qoder**
-
-## 🚀 Installation
-
-### One-click Install
 ```bash
-npx skills add https://github.com/imxv/pretty-mermaid-skills --skill pretty-mermaid
-```
-
-### Verify Installation
-```bash
-cd Pretty-mermaid
+# List official themes
 node scripts/themes.mjs
+
+# Render one diagram
+node scripts/render.mjs --input diagram.mmd --output output.svg --theme default
+
+# Or Python (used by Confluence publish)
+python3 confluence/mermaid.py render diagram.mmd output.svg --theme default
+
+# Batch
+node scripts/batch.mjs --input-dir ./diagrams --output-dir ./output --theme default
 ```
-> **Note**: Dependencies will be auto-installed on first run. Just ensure Node.js is available.
 
-## 📖 Quick Start
+Needs network access to mermaid.ink. Override: `MERMAID_INK_URL`.
 
-### List Available Themes
+## Confluence
+
 ```bash
-node scripts/themes.mjs
+python3 ~/.cursor/skills/pretty-mermaid/confluence/publish.py \
+  --config path/to/page.publish.json
 ```
 
-### Render Single Diagram
-```bash
-node scripts/render.mjs \
-  --input diagram.mmd \
-  --output output.svg \
-  --theme tokyo-night
-```
+See [references/CONFLUENCE.md](references/CONFLUENCE.md).
 
-### Batch Render
-```bash
-node scripts/batch.mjs \
-  --input-dir ./diagrams \
-  --output-dir ./output \
-  --theme dracula
-```
+## Documentation
 
-## 📂 Examples
+See [SKILL.md](SKILL.md).
 
-Check the 5 template files in `assets/example_diagrams/`:
-- `flowchart.mmd` - Flowchart
-- `sequence.mmd` - Sequence Diagram
-- `state.mmd` - State Diagram
-- `class.mmd` - Class Diagram
-- `er.mmd` - ER Diagram
+## Requirements
 
-## 📚 Documentation
-See [SKILL.md](SKILL.md) for detailed usage guide.
+- Node.js 18+ (for `fetch` / `base64url` in the CLI) **or** Python 3.10+ for `mermaid.py` / `publish.py`
+- HTTPS to mermaid.ink (no npm packages required)
 
-## ⚙️ Requirements
-- Node.js 14+
+## License
 
-## 📄 License
 MIT License
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=imxv/Pretty-mermaid-skills&type=timeline&legend=top-left)](https://www.star-history.com/#imxv/Pretty-mermaid-skills&type=timeline&legend=top-left)
-
-## 🙏 Acknowledgments
-Based on [beautiful-mermaid](https://github.com/lukilabs/beautiful-mermaid)

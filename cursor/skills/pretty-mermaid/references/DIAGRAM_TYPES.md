@@ -297,10 +297,10 @@ erDiagram
 ## General Best Practices
 
 ### Theming
-- Use `tokyo-night` for dark mode documentation
-- Use `github-light` for light mode documentation
-- Use `dracula` for vibrant, colorful diagrams
-- Use `monokai` for code-centric diagrams
+- Use `default` for Confluence / light docs (mermaid.live look)
+- Use `dark` for dark-mode documentation
+- Use `forest` / `neutral` / `base` as needed
+- Legacy `tokyo-night` / `github-light` / `dracula` map to `dark` or `default`
 
 ### Performance
 - Keep diagrams under 50 nodes for fast rendering

@@ -1,40 +1,8 @@
 #!/usr/bin/env node
 
-import { execSync } from 'child_process';
-import { dirname, join, resolve } from 'path';
-import { fileURLToPath } from 'url';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'fs';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const skillRoot = join(__dirname, '..');
-
-async function loadBeautifulMermaid() {
-  try {
-    return await import('beautiful-mermaid');
-  } catch {}
-
-  console.error('[beautiful-mermaid] Dependency not found. Installing automatically...');
-  try {
-    execSync('npm install --no-fund --no-audit', {
-      cwd: skillRoot,
-      stdio: ['pipe', 'pipe', 'inherit'],
-      timeout: 120000,
-    });
-    console.error('[beautiful-mermaid] Installed successfully.\n');
-  } catch (e) {
-    console.error(`[beautiful-mermaid] Auto-install failed: ${e.message}`);
-    console.error(`Manual fix: cd ${skillRoot} && npm install`);
-    process.exit(1);
-  }
-
-  try {
-    const pkgPath = join(skillRoot, 'node_modules', 'beautiful-mermaid', 'dist', 'index.js');
-    return await import(pkgPath);
-  } catch (e) {
-    console.error(`[beautiful-mermaid] Failed to load after install: ${e.message}`);
-    process.exit(1);
-  }
-}
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import { renderOfficialSvg, resolveTheme, OFFICIAL_THEMES } from './official-mermaid.mjs';
 
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -42,11 +10,8 @@ function parseArgs() {
     inputDir: null,
     outputDir: null,
     format: 'svg',
-    theme: null,
-    bg: null,
-    fg: null,
+    theme: 'default',
     transparent: false,
-    useAscii: false,
     workers: 4,
   };
 
@@ -59,23 +24,23 @@ function parseArgs() {
       case '--output-dir': case '-o': opts.outputDir = val; i++; break;
       case '--format': case '-f': opts.format = val; i++; break;
       case '--theme': case '-t': opts.theme = val; i++; break;
-      case '--bg': opts.bg = val; i++; break;
-      case '--fg': opts.fg = val; i++; break;
       case '--transparent': opts.transparent = true; break;
-      case '--use-ascii': opts.useAscii = true; break;
-      case '--workers': case '-w': opts.workers = parseInt(val); i++; break;
+      case '--workers': case '-w': opts.workers = parseInt(val, 10); i++; break;
+      case '--bg':
+      case '--fg':
+        i++;
+        break;
+      case '--use-ascii':
+        break;
       case '--help': case '-h':
         console.log(`Usage: node batch.mjs --input-dir <dir> --output-dir <dir> [options]
 
 Options:
   -i, --input-dir <dir>    Input directory containing .mmd files [required]
-  -o, --output-dir <dir>   Output directory for rendered files [required]
-  -f, --format <fmt>       Output format: svg | ascii (default: svg)
-  -t, --theme <name>       Theme name (e.g. tokyo-night, dracula)
-      --bg <hex>           Background color
-      --fg <hex>           Foreground color
-      --transparent        Transparent background (SVG only)
-      --use-ascii          Pure ASCII instead of Unicode (ASCII only)
+  -o, --output-dir <dir>   Output directory for SVG files [required]
+  -f, --format <fmt>       svg only
+  -t, --theme <name>       Official theme: ${OFFICIAL_THEMES.join(', ')}
+      --transparent        Transparent background
   -w, --workers <n>        Parallel workers (default: 4)`);
         process.exit(0);
     }
@@ -97,53 +62,44 @@ Options:
   return opts;
 }
 
-async function renderFile(file, inputDir, outputDir, opts, lib) {
-  const { renderMermaid, renderMermaidAscii, THEMES } = lib;
+async function renderFile(file, inputDir, outputDir, opts) {
   const inputPath = join(inputDir, file);
-  const ext = opts.format === 'svg' ? '.svg' : '.txt';
-  const outputPath = join(outputDir, file.replace(/\.mmd$/, ext));
+  const outputPath = join(outputDir, file.replace(/\.mmd$/, '.svg'));
   const input = readFileSync(inputPath, 'utf8');
-
-  if (opts.format === 'ascii') {
-    const ascii = renderMermaidAscii(input, { useAscii: opts.useAscii });
-    writeFileSync(outputPath, ascii);
-  } else {
-    const theme = opts.theme ? THEMES[opts.theme] : undefined;
-    const colors = theme || {
-      ...(opts.bg && { bg: opts.bg }),
-      ...(opts.fg && { fg: opts.fg }),
-    };
-
-    const svg = await renderMermaid(input, {
-      ...colors,
-      transparent: opts.transparent,
-    });
-    writeFileSync(outputPath, svg);
-  }
+  const svg = await renderOfficialSvg(input, {
+    theme: resolveTheme(opts.theme),
+    transparent: opts.transparent,
+  });
+  writeFileSync(outputPath, svg);
 }
 
 async function main() {
   const opts = parseArgs();
-  const lib = await loadBeautifulMermaid();
+
+  if (opts.format === 'ascii') {
+    console.error(
+      'ASCII Mermaid output was provided by beautiful-mermaid and has been removed.'
+    );
+    process.exit(1);
+  }
 
   mkdirSync(opts.outputDir, { recursive: true });
 
-  const files = readdirSync(opts.inputDir).filter(f => f.endsWith('.mmd'));
+  const files = readdirSync(opts.inputDir).filter((f) => f.endsWith('.mmd'));
   if (files.length === 0) {
     console.error(`No .mmd files found in ${opts.inputDir}`);
     process.exit(1);
   }
 
-  console.log(`Found ${files.length} diagram(s) to render...`);
+  console.log(`Found ${files.length} diagram(s) to render (official mermaid.js)…`);
 
   let success = 0;
   const failed = [];
 
-  // Process in batches of `workers` size
   for (let i = 0; i < files.length; i += opts.workers) {
     const batch = files.slice(i, i + opts.workers);
     const results = await Promise.allSettled(
-      batch.map(file => renderFile(file, opts.inputDir, opts.outputDir, opts, lib))
+      batch.map((file) => renderFile(file, opts.inputDir, opts.outputDir, opts))
     );
 
     results.forEach((result, idx) => {
@@ -169,7 +125,7 @@ async function main() {
   }
 }
 
-main().catch(e => {
+main().catch((e) => {
   console.error('Error:', e.message);
   process.exit(1);
 });

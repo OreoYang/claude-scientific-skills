@@ -1,34 +1,59 @@
-# Reference Documentation for Beautiful Mermaid
+# Official mermaid.js render API (pretty-mermaid 2.x)
 
-This is a placeholder for detailed reference documentation.
-Replace with actual reference content or delete if not needed.
+SVG is fetched from **mermaid.ink** (official mermaid.js, same as mermaid.live). Kroki `POST /mermaid/svg` is the fallback.
 
-Example real reference docs from other skills:
-- product-management/references/communication.md - Comprehensive guide for status updates
-- product-management/references/context_building.md - Deep-dive on gathering context
-- bigquery/references/ - API references and query examples
+## Encode (mermaid.ink)
 
-## When Reference Docs Are Useful
+```
+GET {MERMAID_INK_URL}/svg/{base64url(mermaid_source)}
+```
 
-Reference docs are ideal for:
-- Comprehensive API documentation
-- Detailed workflow guides
-- Complex multi-step processes
-- Information too lengthy for main SKILL.md
-- Content that's only needed for specific use cases
+Optional: `?bgColor=transparent`
 
-## Structure Suggestions
+Python:
 
-### API Reference Example
-- Overview
-- Authentication
-- Endpoints with examples
-- Error codes
-- Rate limits
+```python
+import base64
+b64 = base64.urlsafe_b64encode(mmd.encode()).decode().rstrip("=")
+url = f"https://mermaid.ink/svg/{b64}"
+```
 
-### Workflow Guide Example
-- Prerequisites
-- Step-by-step instructions
-- Common patterns
-- Troubleshooting
-- Best practices
+Node:
+
+```js
+const b64 = Buffer.from(mmd, 'utf8').toString('base64url');
+const url = `https://mermaid.ink/svg/${b64}`;
+```
+
+If the GET is too long or returns 400, retry with mermaid.live **pako** state:
+
+```
+GET https://mermaid.ink/svg/pako:{deflate(JSON.stringify({code, mermaid:{theme}}))}
+```
+
+(`zlib.compress(...)[2:-4]` in Python = raw deflate, same as mermaid.live.)
+
+## Skill entry points
+
+| Call | Path |
+|------|------|
+| Python (Confluence) | `confluence/mermaid.py` → `render_mermaid_svg(mmd, path, theme="default")` |
+| CLI | `node scripts/render.mjs --input f.mmd --output f.svg --theme default` |
+| Themes | `node scripts/themes.mjs` |
+
+Environment:
+
+| Variable | Default |
+|----------|---------|
+| `MERMAID_INK_URL` | `https://mermaid.ink` |
+| `KROKI_URL` | `https://kroki.io/mermaid/svg` |
+
+Post-process: set SVG `width`/`height` from `viewBox` (mermaid.ink often emits `100%`). No stroke thickening, no sequence rgba rewrite — official mermaid.js already paints those.
+
+## Removed (1.x / beautiful-mermaid)
+
+- npm package `beautiful-mermaid`
+- `--bg` / `--fg` / `--line` / `--accent` / `--font`
+- ASCII Mermaid (`--format ascii`, `renderMermaidAscii`)
+- `enhance_mermaid_svg` / layout-review ERROR gate
+- `normalize_mermaid_br()` rewriting `<br/>` → ` · ` (official mermaid.js supports `<br/>`)
