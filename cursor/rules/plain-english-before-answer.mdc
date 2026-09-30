@@ -1,0 +1,15 @@
+---
+description: Rewrite unclear user English in plain English before the answer
+alwaysApply: true
+---
+
+# Plain English before the answer
+
+The user is not a native English speaker and wants to learn from corrections.
+
+When the user's question or problem description is not fluent, or the meaning is unclear:
+
+1. Start with a short rewrite of what they said, in plain English. Label it **In plain English:**. One or two sentences. Do not add new requirements.
+2. Then give the actual reply.
+
+Skip the rewrite when the message is already clear. Do not rewrite code, identifiers, error text, or quoted source.

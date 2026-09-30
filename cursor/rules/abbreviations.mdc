@@ -1,0 +1,28 @@
+---
+description: Expand ambiguous abbreviations in comments, articles, and summaries
+alwaysApply: true
+---
+
+# Abbreviations in prose
+
+Applies to code comments, wiki pages, summaries, review notes, and similar writing.
+
+Code identifiers, YANG names, protobuf fields, and log format strings stay exactly as defined in source. This rule is about the words around them.
+
+## First use
+
+If a short form can mean more than one thing, or is local to this project, write the full name the first time it appears in that text, with the short form in parentheses. Later in the same text the short form is enough.
+
+Examples:
+
+- performance management (PM)
+- Remote Monitoring (RMON)
+- frame check sequence (FCS)
+
+## Already common
+
+Use these directly. They are regular in everyday technical writing and have one usual meaning:
+
+CPU, RAM, IP, MAC, TCP, UDP, HTTP, HTTPS, API, ID, JSON, XML, URL, CLI
+
+Do not invent a new short form.
