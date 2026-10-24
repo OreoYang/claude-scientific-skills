@@ -1,38 +1,41 @@
 ---
 name: xpon-chicago-lab-debug
 description: >-
-  Debug EXS1610 OLT on QD Chicago SS2 lab (10.254.20.137) and Chicago vPON
-  Manager (10.254.21.43 / chicago.vponmanager.qdlab): SSH, DBC, BAL, journalctl,
-  vPM docker Kafka/Postgres/TimescaleDB. Use when debugging Chicago lab, OLT
-  node logs, northbound Kafka telemetry, vPM, PON/ONU, or EXS1610 diagnostics.
-version: 1.2.0
+  English canonical; Chinese archive in SKILL.zh.md. Debug EXS1610 OLT on QD Chicago
+  SS2 lab (10.254.20.137) and vPON Manager (vPM): SSH, DBC, BAL, journalctl,
+  northbound Kafka/CPMP, Postgres. vPM may run as Docker Compose (Chicago ponmgr)
+  or Nomad (container names like kafka-<alloc>). Use for Chicago lab, OLT node logs,
+  vPM/Kafka telemetry, PON/ONU, EXS1610.
+version: 1.4.0
 ---
 
 # XPON Chicago Lab Debug Skill
 
-Chicago SS2 实验台：OLT 节点 debug 在 `10.254.20.137`；北向 vPON Manager (vPM) 在 `10.254.21.43`（`chicago.vponmanager.qdlab`）。Node 内操作先 SSH 进 OLT；Kafka / Postgres / UI 在 vPM docker-compose 里（见 §13）。
+Chinese version: `SKILL.zh.md` in this folder.
 
-**参考文档：**
-- Lab 拓扑/IP：[QD-XGS-Chicago (SS2)](https://vecima.atlassian.net/wiki/spaces/PH/pages/137273176)
-- 通用 Node Debug：[5.2 Node Debug Methods](https://vecima.atlassian.net/wiki/spaces/TS/pages/169182158)
-- Coredump 分析：配合 `xpon-core-dump-debug` skill
+Chicago SS2 lab bench: OLT node debug is on `10.254.20.137`; northbound vPON Manager (vPM) is often on `10.254.21.43` (`chicago.vponmanager.qdlab`), or may be scheduled on another lab host via **Nomad**. For on-node work, SSH into the OLT first; Kafka / Postgres / UI run in containers on the vPM host (**Compose or Nomad**, see §13).
+
+**Reference docs:**
+- Lab topology / IPs: [QD-XGS-Chicago (SS2)](https://vecima.atlassian.net/wiki/spaces/PH/pages/137273176)
+- General node debug: [5.2 Node Debug Methods](https://vecima.atlassian.net/wiki/spaces/TS/pages/169182158)
+- Coredump analysis: use with the `xpon-core-dump-debug` skill
 
 ---
 
-## 1. Lab 环境速查（Chicago SS2）
+## 1. Lab quick reference (Chicago SS2)
 
-| 设备 | IP / 访问 | 账号 | 备注 |
+| Device | IP / access | Account | Notes |
 |------|-----------|------|------|
-| **OLT Node (EXS1610)** | `10.254.20.137` (ma0) | `root` / **空密码** | SN `S220Z31018422`，device name `chicago` |
+| **OLT Node (EXS1610)** | `10.254.20.137` (ma0) | `root` / **empty password** | SN `S220Z31018422`, device name `chicago` |
 | Remote PC (console) | `10.254.20.184` | `root` / `vecima` | serial: `/dev/Node27` |
-| EXC Chicago M OAM | `10.254.21.42` | CLI: `eacadmin/eacadmin` | NETCONF 控制器 |
-| **vPONMgr (vPM)** | `10.254.21.43` (mgmt `ens3`); FQDN `chicago.vponmanager.qdlab`; Kafka/OLT 面 `31.27.90.100` (`ens8`) | SSH: `root` / `nokia@`；WebUI: `admin@vecima.com` / `Vecima@1234` | Docker compose PON Manager；Kafka + TimescaleDB；改 log level、OMCI trace |
+| EXC Chicago M OAM | `10.254.21.42` | CLI: `eacadmin/eacadmin` | NETCONF controller |
+| **vPONMgr (vPM)** | `10.254.21.43` (mgmt `ens3`); FQDN `chicago.vponmanager.qdlab`; Kafka/OLT plane `31.27.90.100` (`ens8`) | SSH: `root` / `nokia@`; WebUI: `admin@vecima.com` / `Vecima@1234` | Docker compose PON Manager; Kafka + TimescaleDB; change log level, OMCI trace |
 | APPS Chicago | `10.254.21.44` | `root` / `nokia@` | |
 
-**VLAN：**
+**VLANs:**
 - Node DHCP: 991 | vCM: 955 | CPE traffic: 1410
 
-**Chicago 常用 PON / ONU（wiki 配置）：**
+**Chicago common PON / ONU (wiki config):**
 
 | ONU | PON | SN | pon_ni (XGS) |
 |-----|-----|-----|--------------|
@@ -42,34 +45,34 @@ Chicago SS2 实验台：OLT 节点 debug 在 `10.254.20.137`；北向 vPON Manag
 | ONU3 | PON16 | HTSZ260D9008 | 30 |
 | ONU4 | PON16 | SCOMA120044C | 30 |
 
-**pon_ni 映射（BAL）：**
-- `pon_ni = (物理PON口 - 1) × 2` → XGS 口（偶数）
-- 例：PON1 → 0/1 (XGS/GPON)，PON16 → 30/31
+**pon_ni mapping (BAL):**
+- `pon_ni = (physical PON port - 1) × 2` → XGS port (even)
+- Example: PON1 → 0/1 (XGS/GPON), PON16 → 30/31
 
-**channeltermination 命名（log 中常见）：**
-- 物理 PON16 → `pon.16`（YANG 名）→ `pon_ni=30`（BAL XGS）
+**channeltermination naming (common in logs):**
+- Physical PON16 → `pon.16` (YANG name) → `pon_ni=30` (BAL XGS)
 
 ---
 
-## 2. 登录 Node
+## 2. Log in to the node
 
-### 2.1 SSH（首选）
+### 2.1 SSH (preferred)
 
 ```bash
 ssh root@10.254.20.137
-# 密码为空，直接回车
+# empty password, press Enter
 ```
 
-登录后 prompt 类似：`root@xgs1610:~ [A]#`（`[A]`/`[B]` 为 RAUC 分区）
+After login the prompt looks like: `root@xgs1610:~ [A]#` (`[A]`/`[B]` are RAUC slots)
 
-### 2.2 经 Remote PC 串口
+### 2.2 Via remote PC serial console
 
 ```bash
-ssh root@10.254.20.184    # 密码 vecima
+ssh root@10.254.20.184    # password vecima
 minicom -w -D /dev/Node27
 ```
 
-### 2.3 快速健康检查（登录后第一件事）
+### 2.3 Quick health check (first thing after login)
 
 ```bash
 cat /etc/os-release
@@ -80,62 +83,62 @@ uptime
 
 ---
 
-## 3. Debug 工具选型（决策树）
+## 3. Debug tool selection (decision tree)
 
 ```
-要查什么？
-├─ 应用层状态（v-ani、forwarder、DHCP session、MAC 表）
-│   └─ dbc <app>                    ← 首选，Vecima 应用 DbgCli
-├─ netconf-polt 内置 Broadcom CLI（BAL API 层、OMCI 内部命令）
+What are you debugging?
+├─ App layer (v-ani, forwarder, DHCP session, MAC table)
+│   └─ dbc <app>                    ← preferred, Vecima DbgCli
+├─ netconf-polt built-in Broadcom CLI (BAL API, OMCI)
 │   └─ /opt/bcm68620/daemon_attach -global netconf
-│       ⚠ 与 dbc netconf 互斥，二选一
-├─ BAL 硬件层（PON 状态、GEM、flow、ONU stats）
-│   ├─ dump-stats.py                ← 快捷脚本，推荐
-│   └─ echo "..." | /opt/bcm68620/example_user_appl   ← 一次性命令
-└─ dev_mgmt_daemon（BAL 核心 daemon CLI）
+│       ⚠ mutually exclusive with dbc netconf
+├─ BAL hardware (PON state, GEM, flow, ONU stats)
+│   ├─ dump-stats.py                ← shortcut, recommended
+│   └─ echo "..." | /opt/bcm68620/example_user_appl   ← one-shot
+└─ dev_mgmt_daemon (BAL core daemon CLI)
     └─ /opt/bcm68620/daemon_attach -global dev_mgmt_daemon
 ```
 
-| 工具 | 路径 | 作用域 | 典型场景 |
+| Tool | Path | Scope | Typical use |
 |------|------|--------|----------|
-| **dbc** | `/usr/bin/dbc` | Vecima 应用 DbgCli | xpon 对象、PH DHCP、LAG 统计 |
-| **daemon_attach** | `/opt/bcm68620/daemon_attach` | BCM daemon FIFO CLI | netconf 内部 CLI、dev_mgmt |
-| **example_user_appl** | `/opt/bcm68620/example_user_appl` | BAL 交互 shell / 管道 | PON/GEM/flow 底层查询 |
-| **dump-stats.py** | `/usr/bin/dump-stats.py` | BAL 统计封装 | 快速 dump pon/onu/gem/flow |
+| **dbc** | `/usr/bin/dbc` | Vecima app DbgCli | xpon objects, PH DHCP, LAG stats |
+| **daemon_attach** | `/opt/bcm68620/daemon_attach` | BCM daemon FIFO CLI | netconf internal CLI, dev_mgmt |
+| **example_user_appl** | `/opt/bcm68620/example_user_appl` | BAL interactive shell / pipe | Low-level PON/GEM/flow queries |
+| **dump-stats.py** | `/usr/bin/dump-stats.py` | BAL stats wrapper | Quick dump pon/onu/gem/flow |
 
 ---
 
-## 4. DBC（Debug Client）
+## 4. DBC (Debug Client)
 
-### 4.1 基本用法
+### 4.1 Basic usage
 
 ```bash
-dbc <app>                    # 交互模式
-dbc -A <app>                 # 同上
-dbc -C "<cmd>" -A <app>      # 单条命令执行后退出
-# Ctrl+D 退出
-# 进入后输入 help 查看该 app 全部命令
+dbc <app>                    # interactive mode
+dbc -A <app>                 # same as above
+dbc -C "<cmd>" -A <app>      # run one command and exit
+# Ctrl+D to exit
+# type help inside for all commands
 ```
 
-### 4.2 可用 app 名
+### 4.2 Available app names
 
-| dbc 命令 | 服务 | 常用 debug |
+| dbc command | Service | Common debug |
 |----------|------|------------|
 | `dbc netconf` | netconf-polt | `xpon get vani all`, `l2_mac_table get` |
 | `dbc ph` | protocol-handler | `showFwdInfo all`, `dumpDHCPSes`, `showAntiSpoofing all` |
 | `dbc lag` | lag | `nni get <0..3>`, `inni get all`, `lag get 1` |
 | `dbc node-mgr` | node-mgr | `serial`, `mac`, `get temp`, `get qsfp` |
-| `dbc swm` | swmgr | `info`（双分区软件信息） |
+| `dbc swm` | swmgr | `info` (dual-slot software info) |
 | `dbc led-mgr` | led-mgr | `alarm_record` |
-| `dbc metrics-mgr` | metrics-mgr | metrics 相关 |
-| `dbc sysmon` | sysmon | CPU/内存/磁盘 |
-| `dbc hwmon` | hwmon | 硬件监控 |
-| `dbc notif` | notif-mgr | 通知 |
+| `dbc metrics-mgr` | metrics-mgr | metrics related |
+| `dbc sysmon` | sysmon | CPU/memory/disk |
+| `dbc hwmon` | hwmon | Hardware monitoring |
+| `dbc notif` | notif-mgr | Notifications |
 | `dbc lldp-ctlr` | lldp-ctlr | LLDP |
 
-App 名定义见 `xpon-libs/debug/include/dbg.h` → `gAppList[]`。
+App names are defined in `xpon-libs/debug/include/dbg.h` → `gAppList[]`.
 
-### 4.3 netconf DBC 常用命令
+### 4.3 Common netconf DBC commands
 
 ```bash
 dbc netconf
@@ -147,12 +150,12 @@ l2_mac_table get
 l2_mac_table dump
 ```
 
-`xpon get <type> <name|all>` 支持的 type：
+`xpon get <type> <name|all>` supported types:
 `channelgroup|channelpair|channelpartition|channeltermination|wavelen_prof|hardware|ani|vani|ani_v-enet|enet|pots|gem|tcont|td_prof|classifier|policy|policy_profile|forwarder|onus_onu|...`
 
-Handler 实现：`netconf-polt/netconf_server/modules/bbf-xpon/bbf-debug.c`
+Handler implementation: `netconf-polt/netconf_server/modules/bbf-xpon/bbf-debug.c`
 
-### 4.4 PH DBC 常用命令
+### 4.4 Common PH DBC commands
 
 ```bash
 dbc ph
@@ -163,13 +166,13 @@ dumpDHCPSes
 dumpDHCPV6Ses
 showAntiSpoofing all
 showDsFlooding all DHCPv4
-pktCapture enable <filename> <count>   # DHCPv6 抓包
+pktCapture enable <filename> <count>   # DHCPv6 capture
 pktCapture disable
 ```
 
-Handler 实现：`xpon-apps/protocol-handler/common/src/ph_dbg.c`
+Handler implementation: `xpon-apps/protocol-handler/common/src/ph_dbg.c`
 
-### 4.5 LAG / INNI 统计
+### 4.5 LAG / INNI statistics
 
 ```bash
 dbc lag
@@ -178,7 +181,7 @@ inni get all           # PON internal switch port
 lag get 1
 ```
 
-**PON ↔ INNI 映射：**
+**PON ↔ INNI mapping:**
 
 | PON Port | INNI ID |
 |----------|---------|
@@ -196,87 +199,87 @@ lag get 1
 
 ## 5. daemon_attach
 
-附着到后台 BCM daemon 的 CLI FIFO，用于 netconf-polt 或 dev_mgmt_daemon 的内置 CLI。
+Attaches to a background BCM daemon CLI FIFO, for netconf-polt or dev_mgmt_daemon built-in CLI.
 
-### 5.1 用法
+### 5.1 Usage
 
 ```bash
 /opt/bcm68620/daemon_attach [-global] [-no-lineedit] [-path path] <daemon_name>
 ```
 
-| 参数 | 含义 |
+| Parameter | Meaning |
 |------|------|
-| `-global` | 全机唯一 daemon 实例（**生产 node 必须加**） |
-| `-no-lineedit` | 禁用行编辑（脚本/pipe 场景） |
-| `-path path` | FIFO 路径，默认 `/tmp` |
+| `-global` | Single machine-wide daemon instance (**required on production nodes**) |
+| `-no-lineedit` | Disable line editing (scripts / pipe use) |
+| `-path path` | FIFO path, default `/tmp` |
 
-### 5.2 常用 daemon 名
+### 5.2 Common daemon names
 
 ```bash
-# netconf-polt 内置 CLI（BAL host API、OMCI 等）
+# netconf-polt built-in CLI (BAL host API, OMCI, …)
 /opt/bcm68620/daemon_attach -global netconf
 
-# BAL 核心 daemon
+# BAL core daemon
 /opt/bcm68620/daemon_attach -global dev_mgmt_daemon
 ```
 
-实现：`netconf-polt/daemon/attach/bcmolt_daemon_attach.c`
+Implementation: `netconf-polt/daemon/attach/bcmolt_daemon_attach.c`
 
-### 5.3 与 dbc 互斥
+### 5.3 Mutual exclusion with dbc
 
-`dbc netconf` 连接期间，`daemon_attach netconf` 会被阻塞并提示：
+While `dbc netconf` is connected, `daemon_attach netconf` is blocked with:
 
 > `dbc is active. Please exit dbc firstly if use daemon_attach!`
 
-**规则：先 Ctrl+D 退出 dbc，再 daemon_attach。**
+**Rule: Ctrl+D to exit dbc first, then daemon_attach.**
 
-源码：`netconf-polt/netconf_server/bcmolt_netconf_server.c` → `DaemonCliThread()`
+Source: `netconf-polt/netconf_server/bcmolt_netconf_server.c` → `DaemonCliThread()`
 
-### 5.4 dbc vs daemon_attach 对比
+### 5.4 dbc vs daemon_attach comparison
 
 | | dbc netconf | daemon_attach netconf |
 |--|-------------|----------------------|
-| 接口 | Vecima DbgCli（xpon get, l2_mac_table） | Broadcom bcmcli（/a/g, /api/...） |
-| 适用 | YANG 对象、业务 debug | BAL API 原始命令、脚本化 CLI |
-| 互斥 | 与 daemon_attach 互斥 | 与 dbc netconf 互斥 |
+| Interface | Vecima DbgCli (xpon get, l2_mac_table) | Broadcom bcmcli (/a/g, /api/...) |
+| Best for | YANG objects, application debug | Raw BAL API commands, scripted CLI |
+| Exclusion | Mutually exclusive with daemon_attach | Mutually exclusive with dbc netconf |
 
 ---
 
-## 6. BAL：example_user_appl
+## 6. BAL: example_user_appl
 
-BAL 交互入口，位于 `/opt/bcm68620/example_user_appl`。
+BAL interactive entry point at `/opt/bcm68620/example_user_appl`.
 
-**问题：** 交互模式下内部 log 刷屏，输出难读。
+**Problem:** In interactive mode internal logs flood the screen and output is hard to read.
 
-**推荐：** 用 `echo` 管道一次性执行：
+**Recommended:** Pipe one-shot commands with `echo`:
 
 ```bash
-# PON1 (pon_ni=0) 状态
+# PON1 (pon_ni=0) state
 echo "/a/g object=pon_interface pon_ni=0 state" | /opt/bcm68620/example_user_appl
 
-# PON1 active ONU 数量
+# PON1 active ONU count
 echo "/a/g object=pon_interface pon_ni=0 number_of_active_onus" | /opt/bcm68620/example_user_appl
 
 # PON16 (pon_ni=30)
 echo "/a/g object=pon_interface pon_ni=30 state" | /opt/bcm68620/example_user_appl
 
-# ONU 状态（PON1, onu_id=0）
+# ONU state (PON1, onu_id=0)
 echo "/a/g object=onu pon_ni=0 onu_id=0" | /opt/bcm68620/example_user_appl
 
-# GEM 列表
+# GEM list
 echo "/a/m max_msgs=20 filter_invert=no object=itupon_gem pon_ni=0" | /opt/bcm68620/example_user_appl
 
-# Flow 列表
+# Flow list
 echo "/a/m max_msgs=50 filter_invert=yes object=flow" | /opt/bcm68620/example_user_appl
 
-# PON 统计（不清 counter）
+# PON stats (do not clear counters)
 echo "/a/t clear=no object=pon_interface sub=itu_pon_stats pon_ni=0" | /opt/bcm68620/example_user_appl
 
-# 上联 NNI 统计
+# uplink NNI stats
 echo "/a/t clear=no object=nni_interface sub=stats id=0" | /opt/bcm68620/example_user_appl
 ```
 
-也可直接进入交互 shell（调试完 `quit` 退出）：
+You can also enter the interactive shell directly (type `quit` when done):
 
 ```bash
 cd /opt/bcm68620 && ./example_user_appl
@@ -284,7 +287,7 @@ cd /opt/bcm68620 && ./example_user_appl
 
 ---
 
-## 7. dump-stats.py（BAL 统计快捷方式）
+## 7. dump-stats.py (BAL stats shortcut)
 
 ```bash
 dump-stats.py -h
@@ -301,16 +304,16 @@ dump-stats.py tm_queue
 dump-stats.py inni pon1
 ```
 
-Chicago 常用：`dump-stats.py pon pon1` / `dump-stats.py onu pon16`。
+Chicago common: `dump-stats.py pon pon1` / `dump-stats.py onu pon16`.
 
 ---
 
-## 8. Log 收集与分析
+## 8. Log collection and analysis
 
-### 8.1 日志位置
+### 8.1 Log locations
 
 ```bash
-# 统一 syslog（首选）
+# unified syslog (preferred)
 cat /run/log/messages
 tail -F /run/log/messages
 tail -500 /run/log/messages | grep -iE 'error|fail|segfault|critical|warn'
@@ -321,7 +324,7 @@ journalctl -f
 journalctl -p err..alert --since "1 hour ago" --no-pager
 ```
 
-### 8.2 按服务过滤
+### 8.2 Filter by service
 
 ```bash
 journalctl -u netconf-polt -b --no-pager | tail -100
@@ -332,26 +335,26 @@ journalctl -f -u netopeer2
 journalctl -f -u dev_mgmt_daemon
 ```
 
-### 8.3 关键 systemd unit
+### 8.3 Key systemd units
 
-| Unit | 作用 |
+| Unit | Role |
 |------|------|
-| `netconf-polt` | NETCONF/YANG、PON/ONU、OMCI |
-| `protocol-handler` | DHCP/PPPoE/转发控制 |
-| `lag` | 上联 NNI/LAG |
-| `netopeer2` | NETCONF SSH 服务端 |
-| `dev_mgmt_daemon` | BAL 核心 daemon |
-| `logsvr` | 集中日志接收 |
-| `redis` | 内部 KV（DHCP session 等） |
-| `metrics-mgr` | 性能指标 |
-| `event-monitor` | 事件分发 |
+| `netconf-polt` | NETCONF/YANG, PON/ONU, OMCI |
+| `protocol-handler` | DHCP/PPPoE/forwarding control |
+| `lag` | Uplink NNI/LAG |
+| `netopeer2` | NETCONF SSH server |
+| `dev_mgmt_daemon` | BAL core daemon |
+| `logsvr` | Centralized log receiver |
+| `redis` | Internal KV (DHCP sessions, etc.) |
+| `metrics-mgr` | Performance metrics |
+| `event-monitor` | Event distribution |
 
-### 8.4 调整 log level
+### 8.4 Adjust log level
 
-**vPONMgr：** WebUI Setting → Service Groups → OLT Logging Configuration
-（或 OLT Inventory → Configuration → Logging）。SSH / Kafka / Postgres 见 **§13**。
+**vPONMgr:** WebUI Setting → Service Groups → OLT Logging Configuration
+(or OLT Inventory → Configuration → Logging). SSH / Kafka / Postgres see **§13**.
 
-Chicago wiki 常用 debug 源：
+Chicago wiki common debug sources:
 - `omci-me-layer`, `omci-transport`, `omci-svc`, `netconf`, `bal-api` → debug
 
 ### 8.5 OMCI log → Wireshark pcap
@@ -370,39 +373,39 @@ python3 ~/.cursor/skills/xpon-omci-pcap/scripts/journal_to_omci_pcap.py \
 
 Wireshark: install `omci.lua` plugin; open `.pcap`; filter `omci` or `eth.type == 0x88b5`.
 
-### 8.6 PLOAM log 抓取
+### 8.6 PLOAM log capture
 
 ```bash
-# 清 log（device_id=0 对应 pon_ni 0~15）
+# clear log (device_id=0 maps to pon_ni 0–15)
 echo "/a/o object=log_file sub=clear device_id=0 file_id=ddr" | /opt/bcm68620/example_user_appl
 
-# 设 debug level
+# set debug level
 echo "/a/s object=log device_id=0 name=ploam_us0 level={print=debug save=debug }" | /opt/bcm68620/example_user_appl
 echo "/a/s object=log device_id=0 name=ploam_ds0 level={print=debug save=debug }" | /opt/bcm68620/example_user_appl
 
 # dump
 echo "user/read_embedded_logger device=0 file_id=ddr" | /opt/bcm68620/example_user_appl > /tmp/ploam.log
 
-# 恢复 info
+# restore info level
 echo "/a/s object=log device_id=0 name=ploam_us0 level={print=info save=info }" | /opt/bcm68620/example_user_appl
 echo "/a/s object=log device_id=0 name=ploam_ds0 level={print=info save=info }" | /opt/bcm68620/example_user_appl
 
-# 分析
+# analyze
 grep message_id /tmp/ploam.log
 ```
 
-### 8.7 Support info 归档
+### 8.7 Support info archive
 
 ```bash
 ls /tmp/debug/support-info-logs*.tar.gz
-# coredump 解密分析 → 见 xpon-core-dump-debug skill
+# coredump decrypt → xpon-core-dump-debug skill
 ```
 
-### 8.8 拔插光纤 / indication 测试 log 抓取
+### 8.8 Fiber pull/insert / indication test log capture
 
-Agent 或人工配合测试时，在 node 上后台抓 `netconf-polt` journal，测试后拉回开发机分析。
+When an agent or a human runs a test, start a background `netconf-polt` journal capture on the node, then pull logs to the dev machine for analysis.
 
-**在 node 上启动抓取：**
+**Start capture on the node:**
 
 ```bash
 CAP=/tmp/fiber_test_capture.log
@@ -412,7 +415,7 @@ nohup journalctl -f -u netconf-polt -o short-precise >> "$CAP" 2>&1 &
 echo $! > /tmp/fiber_test_jpid
 ```
 
-**测试完成后停止并拉回（开发机，需 sshpass）：**
+**Stop and pull after the test (dev machine, needs sshpass):**
 
 ```bash
 sshpass -p '' ssh root@10.254.20.137 'kill $(cat /tmp/fiber_test_jpid) 2>/dev/null'
@@ -420,7 +423,7 @@ sshpass -p '' scp root@10.254.20.137:/tmp/fiber_test_capture.log ./fiber_test.lo
 sshpass -p '' scp root@10.254.20.137:/tmp/fiber_test_start.txt ./marker.txt
 ```
 
-**分析关键字（拔插光纤）：**
+**Analysis keywords (fiber pull/insert):**
 
 ```bash
 grep -iE "pon_interface LOS|LOS status|indication '|deactivation|activation|ranging|online_onus|notif_mgr|alarm_id" fiber_test.log \
@@ -429,28 +432,28 @@ grep -iE "pon_interface LOS|LOS status|indication '|deactivation|activation|rang
 
 ---
 
-## 9. NETCONF / Sysrepo（配置侧 debug）
+## 9. NETCONF / Sysrepo (config-side debug)
 
 ```bash
-# 本地 NETCONF client
+# local NETCONF client
 netopeer2-cli
 > connect --port 830 --host 127.0.0.1 --login root
 
-# 直接读 datastore
+# read datastore directly
 sysrepocfg -d running -X
 sysrepocfg -d operational -X
 sysrepocfg -d running -m bbf-xpon -X
 
-# 软件/分区
+# software / partition
 partition-helper.py info
 rauc status --detailed
 ```
 
 ---
 
-## 10. 常见排查流程
+## 10. Common troubleshooting flows
 
-### 10.1 ONU 不上线
+### 10.1 ONU not coming online
 
 ```bash
 systemctl status netconf-polt dev_mgmt_daemon --no-pager
@@ -460,7 +463,7 @@ dbc -C "xpon get vani all" -A netconf
 journalctl -u netconf-polt --since "10 min ago" --no-pager | grep -i omci
 ```
 
-### 10.2 DHCP 不通
+### 10.2 DHCP not working
 
 ```bash
 dbc -C "dumpDHCPSes" -A ph
@@ -477,36 +480,36 @@ ls -la /tmp/debug/ /var/lib/systemd/coredump/
 # → xpon-core-dump-debug skill
 ```
 
-### 10.4 替换 Binary（开发迭代）
+### 10.4 Replace binary (development iteration)
 
-EXS1610 默认 `usr.mount` 将 `/usr` 只读挂载（RAUC rootfs overlay）。**直接 scp 到 `/usr/bin/` 会失败**；须先 disable `usr.mount` 并 reboot，重启后 `/usr` 才可写。
+On EXS1610, `usr.mount` mounts `/usr` read-only by default (RAUC rootfs overlay). **Direct scp to `/usr/bin/` fails**; you must disable `usr.mount` and reboot first; after reboot `/usr` is writable.
 
-#### 流程（在 node 上操作）
+#### Procedure (on the node)
 
 ```bash
-# 1. 登录 node
+# 1. log in to node
 ssh root@10.254.20.137
 
-# 2. 禁用 usr.mount（使下次启动 /usr 可写）
+# 2. disable usr.mount (writable /usr on next boot)
 systemctl disable usr.mount
 
-# 3. 重启（必须；disable 后须 reboot 才生效）
+# 3. reboot (required after disable)
 reboot
 ```
 
-#### reboot 完成后（在开发机上 scp）
+#### After reboot completes (scp from dev machine)
 
 ```bash
-# 4. 等待 node 起来后，再 scp（reboot 前不要 scp）
+# 4. after node is up, scp (do not scp before reboot)
 sshpass -p '' scp <path>/bcmolt_netconf_server root@10.254.20.137:/usr/bin/bcmolt_netconf_server
 
-# 5. 重启服务并验证
+# 5. restart service and verify
 sshpass -p '' ssh root@10.254.20.137 \
   "chmod 755 /usr/bin/bcmolt_netconf_server && systemctl restart netconf-polt.service && systemctl status netconf-polt.service --no-pager"
-sshpass -p '' ssh root@10.254.20.137 "dbc -C help -A netconf"   # 应打印 Usage，不应 SIGSEGV
+sshpass -p '' ssh root@10.254.20.137 "dbc -C help -A netconf"   # should print Usage, not SIGSEGV
 ```
 
-#### 本机产物路径
+#### Local artifact path
 
 ```bash
 cd ~/works/repo && . setup-env
@@ -514,112 +517,112 @@ bitbake netconf-polt -c compile -f
 find ~/works/repo/build-xpon/tmp/work -path '*netconf-polt*' -name bcmolt_netconf_server
 ```
 
-#### 注意
+#### Notes
 
-| 步骤 | 说明 |
+| Step | Explanation |
 |------|------|
-| `systemctl disable usr.mount` | **必须先做**，否则 `/usr` 只读 |
-| `reboot` | disable 后**必须 reboot**，scp 才有意义 |
-| scp 时机 | **reboot 完成后**再 scp，不要在 disable 后、reboot 前 scp |
-| 整包升级 | 生产/正式验证用 RAUC bundle，不走此 dev 流程 |
-| scp 工具 | 开发机用 `sshpass -p '' scp ...`（见 §11.2） |
+| `systemctl disable usr.mount` | **Do this first**, or `/usr` stays read-only |
+| `reboot` | **Required after disable**; scp only works after reboot |
+| scp timing | **After reboot completes**; do not scp between disable and reboot |
+| Full image upgrade | Production / formal validation uses RAUC bundle, not this dev flow |
+| scp tool | On dev machine use `sshpass -p '' scp ...` (see §11.2) |
 
-### 10.5 拔插光纤 — 触发的 indication（Chicago PON16 实测）
+### 10.5 Fiber pull/insert — indications triggered (Chicago PON16 measured)
 
-物理 PON16（`pon_ni=30`，`pon.16`），2 个 ONU 在线时拔插一次光纤的典型序列。
+Physical PON16 (`pon_ni=30`, `pon.16`), typical sequence for one fiber pull with 2 ONUs online.
 
-**拔光纤（LOS ON）：**
+**Pull fiber (LOS ON):**
 
-| 顺序 | Indication / 事件 | 模块 |
+| Order | Indication / event | Module |
 |------|-------------------|------|
 | 1 | `pon_interface LOS` status=ON | `bbf-xpon.c` `_pon_interface_indication_cb` |
-| 2 | PON LOS alarm 上报（alarm_id=50, `is_clear:false`） | `ipc-notif-mgr.c` |
+| 2 | PON LOS alarm report (alarm_id=50, `is_clear:false`) | `ipc-notif-mgr.c` |
 | 3 | `pon_interface LOS status is on` | `bbf-xpon.c` |
 | 4 | ONU audit debounce cleared | `bbf-xpon-v-ani.c` |
-| 5 | `onu_deactivation_completed`（每个在线 ONU） | `bbf-xpon-v-ani.c` |
-| 6 | 从 `online_onus` 删除 + v-ani → `onu-not-present-with-v-ani` | `bbf-xpon-channel-termination.c` |
+| 5 | `onu_deactivation_completed` (each online ONU) | `bbf-xpon-v-ani.c` |
+| 6 | Remove from `online_onus` + v-ani → `onu-not-present-with-v-ani` | `bbf-xpon-channel-termination.c` |
 | 7 | `ipc_notif_mgr_send_onu_presence` | `ipc-notif-mgr.c` |
 | 8 | OMCI deactivate + `_onualarm_clearall` (reason=LOS) | `omci_svc` / `bbf-xpon-v-ani.c` |
 
-**插回光纤（恢复）：**
+**Re-insert fiber (recovery):**
 
-| 顺序 | Indication / 事件 | 备注 |
+| Order | Indication / event | Notes |
 |------|-------------------|------|
-| 1 | `pon_interface LOS` status=OFF | 可能因 `online_onus` 为空被 skip：`LOS OFF is not reasonable` |
-| 2 | `ONU_discovered` | 每个 ONU 一次 |
+| 1 | `pon_interface LOS` status=OFF | May be skipped when `online_onus` empty: `LOS OFF is not reasonable` |
+| 2 | `ONU_discovered` | Once per ONU |
 | 3 | `ranging_completed` | |
 | 4 | `onu_activation_completed` | |
-| 5 | OMCI activate 启动 | |
-| 6 | `onu-present` presence 通知可能被 skip | flap 保护 |
-| 7 | OMCI UNI link-down alarm (id=41) 后 clear | 以太口状态，非 PON LOS |
+| 5 | OMCI activate starts | |
+| 6 | `onu-present` presence notify may be skipped | Flap protection |
+| 7 | OMCI UNI link-down alarm (id=41) then clear | Ethernet port state, not PON LOS |
 
-**~10s 后（LOS WA 定时器）：**
+**~10s later (LOS WA timer):**
 
-| 事件 | 说明 |
+| Event | Explanation |
 |------|------|
-| `_cterm_pon_los_check_timeout_handler` | BAL LOS-OFF 行为不一致时的 workaround，清除 PON LOS alarm (`is_clear:true`) |
+| `_cterm_pon_los_check_timeout_handler` | Workaround for inconsistent BAL LOS-OFF behavior; clears PON LOS alarm (`is_clear:true`) |
 
-**本次未触发的 indication：** 逐 ONU XGPON PHY alarm（`looci`/`dowi`/`dgi` 等）— LOS 路径直接 bulk deactivate，未走单 ONU PHY alarm 分支。
+**Indications not seen this time:** Per-ONU XGPON PHY alarms (`looci`/`dowi`/`dgi`, etc.) — LOS path bulk-deactivates ONUs without the single-ONU PHY alarm branch.
 
-源码锚点：
-- PON LOS：`netconf-polt/netconf_server/modules/bbf-xpon/bbf-xpon.c` → `BCMOLT_PON_INTERFACE_AUTO_SUBGROUP_LOS`
-- LOS WA 定时器：`bbf-xpon-channel-termination.c` → `_cterm_pon_los_check_timeout_handler`（10s）
-- ONU indication：`bbf-xpon-v-ani.c` → `_onu_indication_cb`
+Source anchors:
+- PON LOS: `netconf-polt/netconf_server/modules/bbf-xpon/bbf-xpon.c` → `BCMOLT_PON_INTERFACE_AUTO_SUBGROUP_LOS`
+- LOS WA timer: `bbf-xpon-channel-termination.c` → `_cterm_pon_los_check_timeout_handler` (10s)
+- ONU indication: `bbf-xpon-v-ani.c` → `_onu_indication_cb`
 
 ---
 
-## 11. Agent / 本地 PC 远程 SSH
+## 11. Agent / local PC remote SSH
 
-Chicago OLT：`root@10.254.20.137`，**空密码**。
+Chicago OLT: `root@10.254.20.137`, **empty password**.
 
-### 11.1 手动 SSH（终端）
+### 11.1 Manual SSH (terminal)
 
 ```bash
-ssh root@10.254.20.137    # 密码提示时直接回车
+ssh root@10.254.20.137    # empty password at prompt, press Enter
 ```
 
-### 11.2 sshpass（Agent / 脚本自动 SSH）
+### 11.2 sshpass (agent / scripted SSH)
 
-**安装位置：本地 PC / LXD 开发容器**（不是 OLT）。`sshpass` 是 SSH **客户端**工具，在发起连接的一侧安装。
+**Install on: local PC / LXD dev container** (not on the OLT). `sshpass` is an SSH **client** tool; install it on the side that initiates the connection.
 
-Vecima LXD 容器（vcmos 5.0）的 dnf 仓库**不含** `sshpass` 包，需从源码编译：
+Vecima LXD container (vcmos 5.0) dnf repos **do not** ship `sshpass`; build from source:
 
 ```bash
-# 在 LXD 容器内（已有 gcc/make/curl）
+# inside LXD container (needs gcc/make/curl)
 cd /tmp
 curl -fsSL -o sshpass-1.10.tar.gz \
   https://downloads.sourceforge.net/project/sshpass/sshpass/1.10/sshpass-1.10.tar.gz
 tar xzf sshpass-1.10.tar.gz && cd sshpass-1.10
 ./configure --prefix=$HOME/.local && make -j$(nproc) && make install
 
-# 验证
+# verify
 sshpass -V
 sshpass -p '' ssh -o StrictHostKeyChecking=no root@10.254.20.137 'hostname'
 ```
 
-安装路径：`~/.local/bin/sshpass`（oreo 用户 PATH 已包含 `~/.local/bin`）。
+Install path: `~/.local/bin/sshpass` (oreo user PATH already includes `~/.local/bin`).
 
-**Ubuntu LXD 宿主机**可直接：`sudo apt install sshpass`
+**Ubuntu LXD host** can use: `sudo apt install sshpass`
 
-### 11.3 Agent 自动连 OLT 示例
+### 11.3 Agent auto-connect to OLT examples
 
 ```bash
 sshpass -p '' ssh root@10.254.20.137 'journalctl -u netconf-polt -n 50 --no-pager'
 sshpass -p '' scp root@10.254.20.137:/run/log/messages /tmp/olt-messages.log
 ```
 
-### 11.4 备选：SSH 公钥免密
+### 11.4 Alternative: SSH public-key login
 
-将本机 `~/.ssh/id_ed25519.pub` 写入 OLT `/root/.ssh/authorized_keys`，之后无需 sshpass。
+Copy local `~/.ssh/id_ed25519.pub` to OLT `/root/.ssh/authorized_keys`; then sshpass is not needed.
 
-### 11.5 Agent 远程操作前提
+### 11.5 Prerequisites for agent remote operations
 
-- `~/.local/bin/sshpass` 已安装并验证（§11.2）→ Agent 可自动 SSH/scp 到 Chicago OLT（空密码）和 vPM（`nokia@`，§13）
-- 未安装时：用户终端手动 SSH，或粘贴 log / scp 文件给 Agent 分析
+- `~/.local/bin/sshpass` installed and verified (§11.2) → agent can auto SSH/scp to Chicago OLT (empty password) and vPM (`nokia@`, §13)
+- If not installed: user SSHs manually in a terminal, or pastes logs / scp files for the agent to analyze
 
 ---
 
-## 12. 硬件 / 制造信息
+## 12. Hardware / manufacturing info
 
 ```bash
 onie-syseeprom
@@ -631,69 +634,121 @@ dbc -C "get hwmonall" -A node-mgr
 
 ---
 
-## 13. Chicago vPON Manager（vPM）debug
+## 13. Chicago vPON Manager (vPM) debug
 
-北向控制器：hostname `chicago.vponmanager.qdlab`，RHEL 9.4，PON Manager 以 **Docker Compose** 跑在 `/root/workspace/pon-mgr-deploy/docker-compose`（project `ponmgr`，镜像 tag `390`）。**Kafka broker 在 vPM 上，不在 OLT 上。** OLT `metrics-mgr` 是 producer。
+Northbound controller: **Kafka broker runs on the vPM host, not on the OLT.** OLT `metrics-mgr` / `notif-mgr` are Kafka producers.
 
-### 13.1 登录
+### 13.0 Compose vs Nomad (identify deployment first)
+
+| Trait | Docker Compose (classic Chicago) | Nomad + Docker driver (common newer labs) |
+|------|-------------------------------|-------------------------------------|
+| Container names | `ponmgr-kafka-1`, `ponmgr-postgresql-1` | `<task>-<alloc-id>`, e.g. `kafka-27bf8e79-…`, `postgres-9b997f21-…` |
+| Management | `docker compose -f …/docker-compose.yml ps` | `nomad job status` / `nomad alloc status <id>`; still use **`docker ps`** on the client to see containers |
+| Paths | `/root/workspace/pon-mgr-deploy/docker-compose` | No fixed compose dir; data volumes mounted by Nomad |
+| Microservice prefix | `ponmgr-ponmgrltcs-1` | `ponmgrltcs-<alloc>`, `ponmgrprov-<alloc>`, `ponmgrctrl-<alloc>` |
+
+**Agent rule:** Do not hard-code `ponmgr-kafka-1`. Run `docker ps --format '{{.Names}}'`, resolve containers by **service name prefix**, then `docker exec`.
+
+On the vPM **host** shell, load once (works for Compose and Nomad):
 
 ```bash
-# SSH（Agent / 脚本）
+# Usage: vpm_ctnr kafka | postgres | ponmgradb | redis | ponmgrltcs | ponmgrprov | ponmgrctrl | ponmgrui
+vpm_ctnr() {
+  local svc="$1"
+  case "$svc" in
+    kafka)       docker ps --format '{{.Names}}' | grep -E '^kafka-' | head -1 ;;
+    postgres)    docker ps --format '{{.Names}}' | grep -E '^postgres-' | head -1 ;;
+    ponmgradb)   docker ps --format '{{.Names}}' | grep -E '^ponmgradb-' | head -1 ;;
+    redis)       docker ps --format '{{.Names}}' | grep -E '^redis-' | head -1 ;;
+    ponmgrltcs)  docker ps --format '{{.Names}}' | grep -E '^ponmgrltcs-' | head -1 ;;
+    ponmgrprov)  docker ps --format '{{.Names}}' | grep -E '^ponmgrprov-' | head -1 ;;
+    ponmgrctrl)  docker ps --format '{{.Names}}' | grep -E '^ponmgrctrl-' | head -1 ;;
+    ponmgrui)    docker ps --format '{{.Names}}' | grep -E '^ponmgrui-' | head -1 ;;
+    *) echo "unknown svc: $svc" >&2; return 1 ;;
+  esac
+}
+
+# Compose fallback (Chicago only): if vpm_ctnr kafka is empty, try ponmgr-kafka-1
+vpm_kafka() { vpm_ctnr kafka || echo ponmgr-kafka-1; }
+vpm_pg()    { vpm_ctnr postgres || vpm_ctnr ponmgradb || echo ponmgr-postgresql-1; }
+
+# Kafka CLI path depends on image (do not assume /opt/kafka/bin only)
+#   apache/kafka (Compose Chicago):  /opt/kafka/bin/kafka-topics.sh
+#   vecima-registry kafka (Nomad): /usr/bin/kafka-topics.sh  (symlink → ../share/kafka/bin/)
+kafka_topics_sh() {
+  local k="${1:-$(vpm_kafka)}"
+  docker exec "$k" sh -c 'test -x /usr/bin/kafka-topics.sh && echo /usr/bin/kafka-topics.sh || echo /opt/kafka/bin/kafka-topics.sh'
+}
+```
+
+Nomad stacks often also have observability components (not required for Kafka debug): `grafana-`, `loki-`, `tempo-`, `otelcol-`, `victoria-metrics-`, `nginx-`, `registry-`, `evc-`, etc.
+
+**Chicago Compose** reference: hostname `chicago.vponmanager.qdlab`, RHEL 9.4, project `ponmgr`, image tag `390`, directory `/root/workspace/pon-mgr-deploy/docker-compose`.
+
+### 13.1 Login
+
+```bash
+# SSH (agent / scripts)
 sshpass -p 'nokia@' ssh -o StrictHostKeyChecking=no root@10.254.21.43
-# 或
-ssh root@chicago.vponmanager.qdlab    # 密码 nokia@
+# or
+ssh root@chicago.vponmanager.qdlab    # password nokia@
 
 # WebUI
-# https://10.254.21.43:8443  或  http://10.254.21.43:8080
+# https://10.254.21.43:8443  or  http://10.254.21.43:8080
 # admin@vecima.com / Vecima@1234
 ```
 
-| 面 | 地址 | 用途 |
+| Plane | Address | Purpose |
 |----|------|------|
-| mgmt `ens3` | `10.254.21.43/23` | SSH、WebUI、实验室管理网 |
-| Kafka/OLT `ens8` | `31.27.90.100/24` | OLT 北向连 Kafka SSL（Chicago OLT `31.27.60.59` → `:10096`） |
-| docker0 / compose | `172.17.0.1` / `172.18.0.1` | 容器互访（`kafka:9092`、`postgresql:5432`） |
+| mgmt `ens3` | `10.254.21.43/23` | SSH, WebUI, lab management network |
+| Kafka/OLT `ens8` | `31.27.90.100/24` | OLT northbound to Kafka SSL (Chicago OLT `31.27.60.59` → `:10096`) |
+| docker0 / compose | `172.17.0.1` / `172.18.0.1` | Container interconnect (`kafka:9092`, `postgresql:5432`) |
 
-### 13.2 栈一览
+### 13.2 Stack overview
 
 ```
 OLT metrics-mgr  --TLS produce-->  vPM Kafka (1 broker, KRaft)
-                                      |
-                                      v  consumer group ponltcs
-                                   ponmgrltcs  -->  PostgreSQL 15 + TimescaleDB
+        |  vecima-olt-telemetry, cpmp-olt-telemetry, XGS-Alarms
+        v
+   ponmgrltcs (consumer group ponltcs)  -->  PostgreSQL / TimescaleDB
 ```
+
+**Inventory (any deployment):**
 
 ```bash
-cd /root/workspace/pon-mgr-deploy/docker-compose
-docker compose ps
 docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
+# Compose only:
+test -f /root/workspace/pon-mgr-deploy/docker-compose/docker-compose.yml && \
+  docker compose -f /root/workspace/pon-mgr-deploy/docker-compose/docker-compose.yml ps
+# Nomad only (on client or server with CLI):
+nomad job status 2>/dev/null | head -30
 ```
 
-| 容器 | 镜像 | 宿主机端口 | 作用 |
-|------|------|------------|------|
-| `ponmgr-kafka-1` | `apache/kafka:3.8.1` | 10092–10094, **10096** | **单 broker**（KRaft：`PROCESS_ROLES=broker,controller`，`NODE_ID=1`） |
-| `ponmgr-postgresql-1` | `timescale/timescaledb:2.27.2-pg15` | **5432** | **是 Postgres**（PG 15 + Timescale 扩展）；各微服务库 |
-| `ponmgr-redis-1` | redis-stack | 6379, 8001 | 缓存 |
-| `ponmgr-ponmgrltcs-1` | `ponmgrltcs:390` | 18025–18027 | Analytics：消费 `vecima-olt-telemetry`，写入 `ponmgrltcs` |
-| `ponmgr-ponmgrctrl-1` | `ponmgrctrl:390` | 4335, 18010–18012 | 控制面 / Call Home |
-| `ponmgr-ponmgrprov-1` | `ponmgrprov:390` | 18005–18007 | 开通；库表带 `_chicago` 后缀 |
-| `ponmgr-ponmgrui-1` | `ponmgrui:390` | 8080, 8443 | Web UI |
-| `ponmgr-grafana-1` / `loki` | grafana / loki 2.9 | 3000 / 3100 | 容器日志看板 |
+| Logical service | Compose container | Nomad container prefix (example) | Role |
+|----------|----------------|--------------------------|------|
+| Kafka | `ponmgr-kafka-1` | `kafka-<alloc>` | Single broker; OLT SSL northbound |
+| Postgres / Timescale | `ponmgr-postgresql-1` | `postgres-<alloc>` or `ponmgradb-<alloc>` | App DBs (`ponmgrltcs`, `ponmgrprov`, …) |
+| Redis | `ponmgr-redis-1` | `redis-<alloc>` | Cache |
+| Analytics | `ponmgr-ponmgrltcs-1` | `ponmgrltcs-<alloc>` | Consumes `vecima-olt-telemetry`, etc. |
+| Control | `ponmgr-ponmgrctrl-1` | `ponmgrctrl-<alloc>` | Call Home / control plane |
+| Provisioning | `ponmgr-ponmgrprov-1` | `ponmgrprov-<alloc>` | OLT provisioning |
+| UI | `ponmgr-ponmgrui-1` | `ponmgrui-<alloc>` | Web UI (often behind `nginx-<alloc>`) |
+| Grafana / Loki | `ponmgr-grafana-1` | `grafana-<alloc>`, `loki-<alloc>` | Logs / metrics dashboards |
 
-数据卷：Kafka `ponmgr_kafka_data`；Postgres `ponmgr_postgres_data`。
+Compose volumes: `ponmgr_kafka_data`, `ponmgr_postgres_data`. Nomad: check alloc mounts (`nomad alloc status -verbose <alloc>`) or host `df` / volume paths.
 
-### 13.3 Kafka（单 broker）
+### 13.3 Kafka (single broker)
 
-**Chicago 实验室是 1 个 Kafka broker**（一个 container）。不是 OLT 本机进程。
+**Chicago lab has 1 Kafka broker** (one container). It is not a process on the OLT.
 
-| 容器端口 | 宿主机 | 协议 | advertised | 给谁用 |
+| Container port | Host | Protocol | advertised | Used by |
 |----------|--------|------|------------|--------|
-| 9092 | **10092** | PLAINTEXT `CLIENT` | `kafka:9092` | compose 内微服务 |
-| 9093 | 10093 | PLAINTEXT `EXTERNAL` | `localhost:10093` | 本机调试 |
-| 9094 | 10094 | `CONTROLLER` | （KRaft 内部） | **不要当 client 端口** |
-| 9096 | **10096** | **SSL `SECURE`** | `chicago.vponmanager.qdlab:10096` | **OLT telemetry / 告警** |
+| 9092 | **10092** | PLAINTEXT `CLIENT` | `kafka:9092` | Compose internal microservices |
+| 9093 | 10093 | PLAINTEXT `EXTERNAL` | `localhost:10093` | Local debug on host |
+| 9094 | 10094 | `CONTROLLER` | (KRaft internal) | **Do not use as client port** |
+| 9096 | **10096** | **SSL `SECURE`** | `chicago.vponmanager.qdlab:10096` | **OLT telemetry / alarms** |
 
-OLT YANG（实测 running）：
+OLT YANG (measured running):
 
 ```xml
 <address>chicago.vponmanager.qdlab</address>
@@ -701,28 +756,41 @@ OLT YANG（实测 running）：
 <publish-timer>120</publish-timer>
 ```
 
-TLS 开在 **10096**，不是 YANG 默认的 9094，也不是宿主机 10094（controller）。
+TLS is on **10096**, not YANG default 9094, and not host 10094 (controller).
 
 ```bash
-# 在 vPM 上
-docker exec ponmgr-kafka-1 /opt/kafka/bin/kafka-topics.sh \
-  --bootstrap-server localhost:9092 --list
+# On vPM host — use vpm_kafka() from §13.0 (or ponmgr-kafka-1 on Compose)
+K="$(vpm_kafka)"
+KT="$(kafka_topics_sh "$K")"
+docker exec "$K" "$KT" --bootstrap-server localhost:9092 --list
 
-docker exec ponmgr-kafka-1 /opt/kafka/bin/kafka-topics.sh \
-  --bootstrap-server localhost:9092 --describe --topic vecima-olt-telemetry
+docker exec "$K" "$KT" --bootstrap-server localhost:9092 --describe --topic vecima-olt-telemetry
 
-docker exec ponmgr-kafka-1 /opt/kafka/bin/kafka-get-offsets.sh \
+docker exec "$K" "$KT" --bootstrap-server localhost:9092 --describe --topic cpmp-olt-telemetry
+
+docker exec "$K" /usr/bin/kafka-get-offsets.sh \
   --bootstrap-server localhost:9092 --topic vecima-olt-telemetry --time -1
 
-docker exec ponmgr-kafka-1 /opt/kafka/bin/kafka-consumer-groups.sh \
+docker exec "$K" /usr/bin/kafka-consumer-groups.sh \
   --bootstrap-server localhost:9092 --group ponltcs --describe
 
-docker logs --tail 80 ponmgr-kafka-1
+docker logs --tail 80 "$K"
 ```
 
-OLT 侧相关 topic：`vecima-olt-telemetry`（metrics-mgr）、`XGS-Alarms`（notif-mgr）。`ponltcs` 消费 telemetry，**lag 应为 0** 表示 Analytics 跟上。
+**CPMP `Local: Unknown topic` on OLT:** usually **topic missing on broker** (not OLT `/` disk). If `vecima-olt-telemetry` exists but `cpmp-olt-telemetry` does not, create it (match partitions/RF of vecima topic):
 
-OLT 上核对连接：
+```bash
+K="$(vpm_kafka)"
+KT="$(kafka_topics_sh "$K")"
+docker exec "$K" "$KT" --bootstrap-server localhost:9092 \
+  --create --if-not-exists --topic cpmp-olt-telemetry --partitions 1 --replication-factor 1
+```
+
+If Kafka **broker disk** is full, check the **Nomad client / volume** backing `kafka-*`, not the OLT root filesystem.
+
+OLT-side topics: `vecima-olt-telemetry` (metrics-mgr tier), `cpmp-olt-telemetry` (CPMP sink), `XGS-Alarms` (notif-mgr). `ponltcs` consumes telemetry; **lag should be 0** when Analytics is keeping up.
+
+Verify connection on OLT:
 
 ```bash
 sysrepocfg -X -d running -f xml -x /vecima-device:device/kafka-interface
@@ -731,24 +799,25 @@ systemctl is-active metrics-mgr
 journalctl -u metrics-mgr -n 50 --no-pager | grep -iE 'broker|Kafka producer|reconnect'
 ```
 
-### 13.4 存储：PostgreSQL + TimescaleDB（是 Postgres）
+### 13.4 Storage: PostgreSQL + TimescaleDB (it is Postgres)
 
-容器 `ponmgr-postgresql-1`：`PostgreSQL 15.18` + 扩展 `timescaledb 2.27`。应用库按微服务拆分，**不是** Mongo/MySQL。
+Postgres container: `ponmgr-postgresql-1` (Compose) or `postgres-*` / `ponmgradb-*` (Nomad). Usually **PostgreSQL 15** + **TimescaleDB**. App databases are split per microservice; **not** Mongo/MySQL.
 
-| 库 | Owner / 服务 | 存什么 |
+| Database | Owner / service | Stores |
 |----|----------------|--------|
-| `ponmgrltcs` | Analytics (`ponmgrltcs`) | 遥测：`channel_termination_statsv3`、`lag_statsv2`、`dhcpv4_stats`、`onu_rssi`、`transceiver_*`、`l2_forwarding`、`lldp` 等 |
-| `ponmgrprov` | provisioning | OLT/ONU/subscriber；Chicago 表名带 `_chicago`（如 `olt`、`onu`、`alarmsv2_chicago`） |
+| `ponmgrltcs` | Analytics (`ponmgrltcs`) | Telemetry: `channel_termination_statsv3`, `lag_statsv2`, `dhcpv4_stats`, `onu_rssi`, `transceiver_*`, `l2_forwarding`, `lldp`, etc. |
+| `ponmgrprov` | provisioning | OLT/ONU/subscriber; Chicago table names use `_chicago` (e.g. `olt`, `onu`, `alarmsv2_chicago`) |
 | `ponmgrauth` | auth | users / operators / tokens |
-| `ponmgrfms` | firmware | ONU/OLT firmware、campaign |
+| `ponmgrfms` | firmware | ONU/OLT firmware, campaigns |
 | `ponmgrrbac` | RBAC | roles / policies |
-| `ponmgrsupinfo` | support-info | support 包元数据 |
-| `postgres` | superuser | 维护库 |
+| `ponmgrsupinfo` | support-info | support package metadata |
+| `postgres` | superuser | maintenance DB |
 
-容器内用 superuser，不必从 `.env` 掏业务密码：
+Use superuser inside the container; no need to dig app passwords from `.env`:
 
 ```bash
-docker exec -it ponmgr-postgresql-1 psql -U postgres
+PG="$(vpm_pg)"
+docker exec -it "$PG" psql -U postgres
 # \l
 # \c ponmgrltcs
 # \dt
@@ -757,50 +826,59 @@ docker exec -it ponmgr-postgresql-1 psql -U postgres
 # SELECT * FROM olt;
 ```
 
-非交互：
+Non-interactive:
 
 ```bash
-docker exec ponmgr-postgresql-1 psql -U postgres -c '\l'
-docker exec ponmgr-postgresql-1 psql -U postgres -d ponmgrltcs -c '\dt'
-docker exec ponmgr-postgresql-1 pg_isready -U postgres
+PG="$(vpm_pg)"
+docker exec "$PG" psql -U postgres -c '\l'
+docker exec "$PG" psql -U postgres -d ponmgrltcs -c '\dt'
+docker exec "$PG" pg_isready -U postgres
 ```
 
-备份脚本：`/root/workspace/pon-mgr-deploy/docker-compose/db-backup.sh` / `db-restore.sh`。
+Compose backup: `/root/workspace/pon-mgr-deploy/docker-compose/db-backup.sh` / `db-restore.sh`. Nomad: follow platform runbook or volume snapshot.
 
-Redis 是会话/缓存，**不是** telemetry 主存储。Kafka 是管道；**落库在 Postgres（Timescale）**。
+Redis is session/cache, **not** primary telemetry storage. Kafka is the pipe; **persistence is Postgres (Timescale)**.
 
-### 13.5 微服务日志 / Grafana
+### 13.5 Microservice logs / Grafana
 
 ```bash
-docker logs --tail 100 ponmgr-ponmgrltcs-1
-docker logs --tail 100 ponmgr-ponmgrctrl-1
-docker logs --tail 100 ponmgr-postgresql-1
+docker logs --tail 100 "$(vpm_ctnr ponmgrltcs || echo ponmgr-ponmgrltcs-1)"
+docker logs --tail 100 "$(vpm_ctnr ponmgrctrl || echo ponmgr-ponmgrctrl-1)"
+docker logs --tail 100 "$(vpm_pg)"
 ```
 
-Grafana：`http://10.254.21.43:3000`（Loki 收各微服务 log）。WebUI 改 OLT log level 仍走 §8.4。
+Grafana: Compose often `http://<vpm-host>:3000`; Nomad often `grafana-<alloc>` (port from `docker ps` / ingress). WebUI OLT log level changes still use §8.4.
 
-### 13.6 Agent 远程 vPM
+### 13.6 Agent remote vPM
 
 ```bash
+# Replace host/user/password for your Nomad client
 sshpass -p 'nokia@' ssh -o StrictHostKeyChecking=no root@10.254.21.43 \
-  'docker compose -f /root/workspace/pon-mgr-deploy/docker-compose/docker-compose.yml ps'
+  'docker ps --format "table {{.Names}}\t{{.Status}}" | grep -E "kafka-|postgres-|ponmgr"'
 ```
 
-BusyBox 不在 vPM 上（RHEL）；OLT 上 `head -n N`，不要 `head -40`。
+Nomad one-liner from dev PC (after SSH to vPM host):
+
+```bash
+K=$(docker ps --format '{{.Names}}' | grep -E '^kafka-' | head -1)
+docker exec "$K" /usr/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
+```
+
+BusyBox is not on vPM (RHEL); on OLT use `head -n N`, not `head -40`.
 
 ---
 
 ## Quick Reference Card
 
 ```bash
-# 登录
-ssh root@10.254.20.137          # 空密码
+# login
+ssh root@10.254.20.137          # empty password
 
-# 健康
+# health
 systemctl is-active netconf-polt protocol-handler lag dev_mgmt_daemon
 cat /etc/os-release
 
-# 应用 debug
+# app debug
 dbc netconf                     # xpon get vani all
 dbc ph                          # dumpDHCPSes
 dbc lag                         # inni get all
@@ -809,7 +887,7 @@ dbc lag                         # inni get all
 dump-stats.py pon pon1
 echo "/a/g object=pon_interface pon_ni=0 state" | /opt/bcm68620/example_user_appl
 
-# netconf 内置 CLI（先退出 dbc netconf）
+# netconf built-in CLI (exit dbc netconf first)
 /opt/bcm68620/daemon_attach -global netconf
 
 # Log
@@ -817,18 +895,19 @@ tail -F /run/log/messages
 journalctl -f -u netconf-polt
 journalctl -p err..alert --since "1 hour ago" --no-pager
 
-# 替换 binary（须先 disable usr.mount + reboot，再 scp）
+# replace binary (disable usr.mount + reboot first, then scp)
 sshpass -p '' ssh root@10.254.20.137 "systemctl disable usr.mount && reboot"
-# 等 node 起来后：
+# after node is up:
 sshpass -p '' scp <path>/bcmolt_netconf_server root@10.254.20.137:/usr/bin/
 sshpass -p '' ssh root@10.254.20.137 "chmod 755 /usr/bin/bcmolt_netconf_server && systemctl restart netconf-polt"
 
-# 拔插光纤 log 抓取（见 §8.8 / §10.5）
+# fiber pull/insert log capture (§8.8 / §10.5)
 
-# --- vPM (10.254.21.43, 密码 nokia@) ---
+# --- vPM (host varies; Chicago 10.254.21.43 password nokia@) ---
 sshpass -p 'nokia@' ssh root@10.254.21.43
-docker compose -f /root/workspace/pon-mgr-deploy/docker-compose/docker-compose.yml ps
-docker exec ponmgr-kafka-1 /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
-docker exec ponmgr-postgresql-1 psql -U postgres -c '\l'
-# OLT kafka-interface → chicago.vponmanager.qdlab:10096 (SSL)
+docker ps --format '{{.Names}}' | grep -E '^kafka-|^postgres-|^ponmgr'
+K=$(docker ps --format '{{.Names}}' | grep -E '^kafka-' | head -1)
+docker exec "$K" /usr/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
+PG=$(docker ps --format '{{.Names}}' | grep -E '^postgres-' | head -1); docker exec "$PG" psql -U postgres -c '\l'
+# OLT kafka-interface → vPM FQDN + SSL port (Chicago: chicago.vponmanager.qdlab:10096)
 ```

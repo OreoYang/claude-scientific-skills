@@ -143,3 +143,4 @@ See [troubleshooting.md](troubleshooting.md) for ping vs HTTPS, proxy, 504/timeo
 
 - Confluence: [Setup Crucible MCP in Cursor](https://vecima.atlassian.net/wiki/spaces/~tobyt/pages/177308164)
 - Crucible UI: `https://crucible.corp.vecima.com/cru/<review-id>`
+- Review **Objectives / Description** text: repo rule `xgs-cr-review.mdc` — default **Crucible short form** (one E2E line + bullets; keep it brief).
